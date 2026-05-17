@@ -16,6 +16,7 @@ use spectrum_offchain_cardano::data::pool::AnyPool::{BalancedCFMM, PureCFMM, Sta
 use spectrum_offchain_cardano::data::quadratic_pool::QuadraticPool;
 
 pub mod classified;
+pub mod royalty_v1;
 use classified::ClassifiedPool;
 use spectrum_offchain_cardano::data::royalty_withdraw_request::RoyaltyWithdrawContext;
 use spectrum_offchain_cardano::data::stable_order::RunStableAMMOrderOverPool;

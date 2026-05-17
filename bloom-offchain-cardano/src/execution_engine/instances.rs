@@ -1,5 +1,6 @@
 use cml_chain::plutus::PlutusData;
 use cml_chain::transaction::TransactionOutput;
+use cml_core::serialization::RawBytesEncoding;
 use cml_crypto::Ed25519KeyHash;
 use log::trace;
 
@@ -9,6 +10,7 @@ use bloom_offchain::execution_engine::execution_effect::ExecutionEff;
 use bloom_offchain::execution_engine::liquidity_book::core::{Make, Next, Take, Trans};
 use bloom_offchain::execution_engine::liquidity_book::market_taker::MarketTaker;
 use spectrum_cardano_lib::output::FinalizedTxOut;
+use spectrum_cardano_lib::plutus_data::IntoPlutusData;
 use spectrum_cardano_lib::transaction::TransactionOutputExtension;
 use spectrum_cardano_lib::{AssetClass, NetworkId};
 use spectrum_offchain::domain::Has;
@@ -26,17 +28,24 @@ use spectrum_offchain_cardano::deployment::ProtocolValidator::{
     GridOrderNative, InstantOrderV1, InstantOrderWitnessV1, LimitOrderV1, LimitOrderWitnessV1, RoyaltyPoolV1,
     RoyaltyPoolV1LedgerFixed, RoyaltyPoolV2, StableFnPoolT2T,
 };
-use spectrum_offchain_cardano::deployment::{DeployedValidator, DeployedValidatorErased, RequiresValidator};
+use spectrum_offchain_cardano::deployment::{
+    DeployedScriptInfo, DeployedValidator, DeployedValidatorErased, RequiresValidator,
+};
 use spectrum_offchain_cardano::script::{
     delayed_cost, delayed_redeemer, ready_cost, ready_redeemer, ScriptWitness,
 };
 
 use crate::execution_engine::execution_state::{ExecutionState, ScriptInputBlueprint};
 use crate::orders::adhoc::{AdhocFeeStructure, AdhocOrder};
+use crate::orders::green::{
+    apply_full_fill_to_account_output, AlephAccountAction, AlephAccountUtxo, AlephAuthorizedIntention,
+    GreenAccountLookup, GreenAuth, GreenOrder, ALEPH_ACCOUNT_VALIDATOR, ALEPH_BATCH_WITNESS_VALIDATOR,
+};
 use crate::orders::grid::GridOrder;
 use crate::orders::limit::LimitOrder;
 use crate::orders::{grid, instant, limit, AnyOrder};
 use crate::pools::classified::ClassifiedPool;
+use crate::pools::royalty_v1::RoyaltyV1PoolOnly;
 
 /// Magnet for local instances.
 #[repr(transparent)]
@@ -472,6 +481,212 @@ where
             ),
             context,
         )
+    }
+}
+
+impl<Ctx> BatchExec<ExecutionState, EffectPreview<GreenOrder>, Ctx>
+    for Magnet<Take<GreenOrder, FinalizedTxOut>>
+where
+    Ctx: GreenAccountLookup
+        + Has<OperatorCred>
+        + Has<DeployedValidator<{ ALEPH_ACCOUNT_VALIDATOR }>>
+        + Has<DeployedValidator<{ ALEPH_BATCH_WITNESS_VALIDATOR }>>
+        + Has<DeployedScriptInfo<{ ALEPH_ACCOUNT_VALIDATOR }>>,
+{
+    fn exec(
+        self,
+        mut state: ExecutionState,
+        context: Ctx,
+    ) -> (ExecutionState, EffectPreview<GreenOrder>, Ctx) {
+        let Magnet(trans) = self;
+        trace!("Running transition: {}", trans);
+        let removed_input = trans.removed_input();
+        let added_output = trans.added_output();
+        let consumed_budget = trans.consumed_budget();
+        let consumed_fee = trans.consumed_fee();
+        trace!(
+            "GreenOrder::exec(removed_input={}, added_output={}, consumed_budget={}, consumed_fee={})",
+            removed_input,
+            added_output,
+            consumed_budget,
+            consumed_fee
+        );
+
+        let Trans {
+            target: Bundled(ord, _),
+            result,
+        } = trans;
+        let Next::Term(_) = result else {
+            panic!("GreenOrder partial execution is disabled in the phase-1 agent")
+        };
+        if !matches!(ord.auth, GreenAuth::Sig { .. }) {
+            panic!("GreenOrder Auth::Path execution is disabled in the phase-1 agent")
+        }
+        if consumed_budget != 0 {
+            panic!("GreenOrder execution budget must be zero in phase 1")
+        }
+        if ord.intention.input_asset != AssetClass::Native {
+            panic!("GreenOrder phase-1 execution supports only ADA-leaving orders")
+        }
+        let operator = Ed25519KeyHash::from(context.select::<OperatorCred>());
+        let operator_hash =
+            <[u8; 28]>::try_from(operator.to_raw_bytes()).expect("operator hash must be 28 bytes");
+        if ord.intention.operator_key_hash != operator_hash {
+            panic!("GreenOrder operator does not match runtime operator credential")
+        }
+        if removed_input != ord.intention.leaving_amount {
+            panic!(
+                "GreenOrder phase-1 execution requires full input consumption: consumed {}, expected {}",
+                removed_input, ord.intention.leaving_amount
+            )
+        }
+        if added_output < ord.intention.expected_arriving_amount {
+            panic!(
+                "GreenOrder execution produced insufficient output: produced {}, expected at least {}",
+                added_output, ord.intention.expected_arriving_amount
+            )
+        }
+
+        let account_bearer = context
+            .current_account(ord.account_id)
+            .expect("GreenOrder account is not indexed or is currently locked");
+        let account =
+            AlephAccountUtxo::try_parse(account_bearer.reference(), account_bearer.0.clone(), &context)
+                .expect("indexed GreenOrder account UTxO does not match Aleph account validator");
+        let next_state = account
+            .state
+            .clone()
+            .with_sig_full_fill_nonce(ord.intention.target_nonce_slot, ord.intention.target_nonce_value)
+            .expect("GreenOrder target nonce cannot be applied to current account state");
+
+        let account_validator = context
+            .select::<DeployedValidator<{ ALEPH_ACCOUNT_VALIDATOR }>>()
+            .erased();
+        let batch_witness = context
+            .select::<DeployedValidator<{ ALEPH_BATCH_WITNESS_VALIDATOR }>>()
+            .erased();
+        let witness_hash =
+            <[u8; 28]>::try_from(batch_witness.hash.to_raw_bytes()).expect("script hash must be 28 bytes");
+        let delegate_ix = account
+            .state
+            .allowlist
+            .iter()
+            .position(|hash| *hash == witness_hash)
+            .expect("Aleph batch witness script is not present in account allowlist");
+
+        let mut account_output = account.output.clone();
+        apply_full_fill_to_account_output(
+            &mut account_output,
+            &ord,
+            removed_input,
+            added_output,
+            consumed_fee,
+        )
+        .expect("GreenOrder account value transition failed");
+        let datum = account_output
+            .data_mut()
+            .expect("Aleph account output must carry inline account datum");
+        *datum = next_state.into_pd();
+
+        let input = ScriptInputBlueprint {
+            reference: account.output_ref,
+            utxo: account.output.clone(),
+            script: ScriptWitness {
+                hash: account_validator.hash,
+                cost: delayed_cost(move |ctx| {
+                    account_validator.ex_budget + account_validator.marginal_cost.scale(ctx.self_index as u64)
+                }),
+            },
+            redeemer: ready_redeemer(AlephAccountAction::Delegate(delegate_ix as u64).into_pd()),
+            required_signers: vec![operator].into(),
+        };
+
+        let authorized = AlephAuthorizedIntention {
+            intent: ord.aleph_intention(),
+            remainder: 0,
+            auth: ord.auth.clone(),
+        };
+        let consumed_bundle = Bundled(ord, account.finalized_output());
+
+        state.add_tx_fee(consumed_budget);
+        state.add_operator_interest(consumed_fee);
+        state.tx_blueprint.add_account_io(input, account_output);
+        state.tx_blueprint.add_ref_input(account_validator.reference_utxo);
+        state
+            .tx_blueprint
+            .add_aleph_batch_intention(batch_witness, account.output_ref, authorized);
+
+        (state, ExecutionEff::Eliminated(consumed_bundle), context)
+    }
+}
+
+impl<Ctx> BatchExec<ExecutionState, EffectPreview<RoyaltyV1PoolOnly>, Ctx>
+    for Magnet<Make<RoyaltyV1PoolOnly, FinalizedTxOut>>
+where
+    Ctx: Has<DeployedValidator<{ RoyaltyPoolV1 as u8 }>>
+        + Has<DeployedValidator<{ RoyaltyPoolV1LedgerFixed as u8 }>>,
+{
+    fn exec(
+        self,
+        mut state: ExecutionState,
+        context: Ctx,
+    ) -> (ExecutionState, EffectPreview<RoyaltyV1PoolOnly>, Ctx) {
+        let Magnet(trans) = self;
+        let side = trans.trade_side().expect("Empty swaps aren't allowed");
+        let removed_liquidity = trans.loss().expect("Something must be removed");
+        let added_liquidity = trans.gain().expect("Something must be added");
+        let Trans {
+            target: Bundled(pool, FinalizedTxOut(consumed_out, in_ref)),
+            result,
+        } = trans;
+        let mut produced_out = consumed_out.clone();
+        let PoolAssetMapping {
+            asset_to_deduct_from,
+            asset_to_add_to,
+        } = ConstFnPool::Royalty(pool.into_inner()).asset_mapping(side);
+        trace!("RoyaltyV1PoolOnly::exec(side={}, removed_liq={}, added_liq={}, asset_to_deduct_from={}, asset_to_add_to={})", side, removed_liquidity, added_liquidity, asset_to_deduct_from, asset_to_add_to);
+        produced_out.sub_asset(asset_to_deduct_from, removed_liquidity);
+        produced_out.add_asset(asset_to_add_to, added_liquidity);
+
+        let DeployedValidatorErased {
+            reference_utxo,
+            hash,
+            ex_budget,
+            marginal_cost,
+        } = pool.get_validator(&context);
+        let input = ScriptInputBlueprint {
+            reference: in_ref,
+            utxo: consumed_out.clone(),
+            script: ScriptWitness {
+                hash,
+                cost: delayed_cost(move |ctx| ex_budget + marginal_cost.scale(ctx.self_index as u64)),
+            },
+            redeemer: delayed_redeemer(move |ordering| {
+                CFMMPoolRedeemer {
+                    pool_input_index: ordering.index_of(&in_ref) as u64,
+                    action: CFMMPoolAction::Swap,
+                }
+                .to_plutus_data()
+            }),
+            required_signers: vec![].into(),
+        };
+
+        let Next::Succ(transition) = result else {
+            panic!("Royalty V1 pool isn't supposed to terminate in result of a trade")
+        };
+
+        if let Some(data) = produced_out.data_mut() {
+            ConstFnPool::Royalty(transition.into_inner()).unsafe_datum_update(data);
+        }
+
+        let updated_output = produced_out.clone();
+        let consumed = Bundled(pool, FinalizedTxOut(consumed_out, in_ref));
+        let produced = Bundled(transition, updated_output.clone());
+        let trans = ExecutionEff::Updated(consumed, produced);
+
+        state.tx_blueprint.add_io(input, updated_output);
+        state.tx_blueprint.add_ref_input(reference_utxo);
+        (state, trans, context)
     }
 }
 

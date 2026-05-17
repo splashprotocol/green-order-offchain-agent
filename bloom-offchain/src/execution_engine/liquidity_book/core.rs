@@ -253,7 +253,7 @@ impl<T, B> Take<T, B> {
 
     pub fn scale_consumed_budget(&mut self, scale: Ratio<u64>) -> i64
     where
-        T: MarketTaker + TakerBehaviour + Copy,
+        T: MarketTaker + TakerBehaviour + Clone,
     {
         let consumed_budget = self.consumed_budget();
         match &mut self.result {
@@ -261,7 +261,7 @@ impl<T, B> Take<T, B> {
                 let old_val = consumed_budget;
                 let new_val = old_val * scale.numer() / scale.denom();
                 let delta_consumed_budget = new_val as i64 - old_val as i64;
-                let (delta_budget, updated) = next.with_budget_corrected(-delta_consumed_budget);
+                let (delta_budget, updated) = next.clone().with_budget_corrected(-delta_consumed_budget);
                 let _ = mem::replace(next, updated);
                 let delta_consumed_budget = -delta_budget;
                 delta_consumed_budget
@@ -280,11 +280,11 @@ impl<T, B> Take<T, B> {
 
     pub fn correct_consumed_budget(&mut self, delta: i64) -> i64
     where
-        T: MarketTaker + TakerBehaviour + Copy,
+        T: MarketTaker + TakerBehaviour + Clone,
     {
         match &mut self.result {
             Next::Succ(ref mut next) => {
-                let (delta_budget, updated) = next.with_budget_corrected(-delta);
+                let (delta_budget, updated) = next.clone().with_budget_corrected(-delta);
                 let _ = mem::replace(next, updated);
                 let delta_consumed_budget = -delta_budget;
                 delta_consumed_budget
@@ -453,7 +453,7 @@ impl<Maker> MakeInProgress<Maker> {
 
     pub fn finalized(self) -> Option<(FinalMake<Maker>, Excess)>
     where
-        Maker: MarketMaker + MakerBehavior + Copy,
+        Maker: MarketMaker + MakerBehavior + Clone,
     {
         let Self { target, result } = self;
         match result {
@@ -465,11 +465,11 @@ impl<Maker> MakeInProgress<Maker> {
                 let d_base = next_reserves.base.checked_sub(target_reserves.base);
                 if let Some(d_base) = d_base {
                     let trade_input = d_base;
-                    let rebalanced = match target.swap(OnSide::Ask(trade_input)) {
+                    let rebalanced = match target.clone().swap(OnSide::Ask(trade_input)) {
                         Next::Succ(maker) => maker,
                         Next::Term(_) => unreachable!(),
                     };
-                    let rebalanced = target.preserve_preview_metadata(next, rebalanced);
+                    let rebalanced = target.clone().preserve_preview_metadata(next, rebalanced);
                     let rebalanced_reserves = rebalanced.liquidity();
                     trace!("R_rebalanced in d_base {:?}", rebalanced_reserves);
                     let excess_quote = next_reserves.quote.checked_sub(rebalanced_reserves.quote)?;
@@ -480,11 +480,11 @@ impl<Maker> MakeInProgress<Maker> {
                     Some((Final(Trans::new(target, Next::Succ(rebalanced))), delta))
                 } else {
                     let trade_input = next_reserves.quote.checked_sub(target_reserves.quote)?;
-                    let rebalanced = match target.swap(OnSide::Bid(trade_input)) {
+                    let rebalanced = match target.clone().swap(OnSide::Bid(trade_input)) {
                         Next::Succ(maker) => maker,
                         Next::Term(_) => unreachable!(),
                     };
-                    let rebalanced = target.preserve_preview_metadata(next, rebalanced);
+                    let rebalanced = target.clone().preserve_preview_metadata(next, rebalanced);
                     let rebalanced_reserves = rebalanced.liquidity();
                     trace!("R_rebalanced in d_quote {:?}", rebalanced_reserves);
                     let excess_base = next_reserves.base.checked_sub(rebalanced_reserves.base)?;
@@ -566,12 +566,12 @@ pub struct FinalRecipe<Taker: Stable, Maker: Stable> {
 impl<T: Stable, M: Stable> FinalRecipe<T, M> {
     pub fn unsatisfied_fragments(&self) -> Vec<T>
     where
-        T: MarketTaker + Copy,
+        T: MarketTaker + Clone,
     {
         self.takes
             .iter()
             .filter_map(|(_, Final(apply))| {
-                let target = apply.target;
+                let target = apply.target.clone();
                 if apply.added_output() < target.min_marginal_output() {
                     Some(target)
                 } else {
@@ -634,9 +634,9 @@ impl<Taker: Stable, Maker: Stable, U> MatchmakingAttempt<Taker, Maker, U> {
 
     pub fn execution_units_consumed(&self) -> U
     where
-        U: Copy,
+        U: Clone,
     {
-        self.execution_units_consumed
+        self.execution_units_consumed.clone()
     }
 
     pub fn next_offered_chunk(&self, taker: &Taker) -> OnSide<u64>
@@ -701,7 +701,7 @@ impl<Taker: Stable, Maker: Stable, U> MatchmakingAttempt<Taker, Maker, U> {
 
     pub fn finalized(self) -> Option<FinalRecipe<Taker, Maker>>
     where
-        Maker: MarketMaker + MakerBehavior + Copy,
+        Maker: MarketMaker + MakerBehavior + Clone,
         Taker: MarketTaker + TakerBehaviour,
     {
         let (mut excess_base, mut excess_quote) = (0u64, 0u64);
@@ -784,8 +784,8 @@ where
         cx: C,
     ) -> Result<Self, Option<Either<DissatisfiedTakers<Taker>, DowngradeNeeded>>>
     where
-        Maker: MarketMaker + MakerBehavior + Copy,
-        Taker: MarketTaker + TakerBehaviour + Copy,
+        Maker: MarketMaker + MakerBehavior + Clone,
+        Taker: MarketTaker + TakerBehaviour + Clone,
         C: Has<BaseStepBudget>,
     {
         if attempt.is_complete() {

@@ -72,8 +72,8 @@ pub struct TLB<Taker, Maker: Stable, Pair, U> {
 
 impl<Taker, Maker, P, U> LBFeedback<Taker, Maker> for TLB<Taker, Maker, P, U>
 where
-    Taker: MarketTaker + Ord + Copy,
-    Maker: MarketMaker + Stable + Copy,
+    Taker: MarketTaker + Ord + Clone,
+    Maker: MarketMaker + Stable + Clone,
 {
     fn on_recipe_succeeded(&mut self) {
         self.state.commit();
@@ -99,7 +99,7 @@ where
     fn spot_price(&self) -> Option<SpotPrice>
     where
         Taker: MarketTaker,
-        Maker: MarketMaker + Copy,
+        Maker: MarketMaker + Clone,
     {
         self.state.best_market_maker().map(|mm| mm.static_price())
     }
@@ -107,8 +107,8 @@ where
 
 impl<Taker, Maker, P, U> TLB<Taker, Maker, P, U>
 where
-    Taker: MarketTaker<U = U> + Ord + Copy + Display,
-    Maker: MarketMaker + Stable + Copy,
+    Taker: MarketTaker<U = U> + Ord + Clone + Display,
+    Maker: MarketMaker + Stable + Clone,
     U: PartialOrd,
 {
     fn on_take<Any>(&mut self, tx: Next<Taker, Any>) {
@@ -126,9 +126,9 @@ where
 
 impl<Taker, Maker, P, U> LiquidityBook<Taker, Maker, Vec<ExecutionEvent>> for TLB<Taker, Maker, P, U>
 where
-    Taker: Stable + MarketTaker<U = U> + TakerBehaviour + Ord + Copy + Display,
-    Maker: Stable + MarketMaker<U = U> + MakerBehavior + Copy + Display,
-    U: Monoid + AddAssign + PartialOrd + Copy,
+    Taker: Stable + MarketTaker<U = U> + TakerBehaviour + Ord + Clone + Display,
+    Maker: Stable + MarketMaker<U = U> + MakerBehavior + Clone + Display,
+    U: Monoid + AddAssign + PartialOrd + Clone,
     P: Display,
 {
     fn attempt(&mut self) -> (Option<MatchmakingRecipe<Taker, Maker>>, Vec<ExecutionEvent>) {
@@ -187,12 +187,13 @@ where
                                 if let Some(counter_taker) = self.state.try_pick_taker(!target_side, ok) {
                                     let make_match =
                                         |ask: &Taker, bid: &Taker| settle_price(ask, bid, Some(spot_price));
+                                    trace!("Taker {} matched with {}", target_taker, counter_taker);
                                     let (take_a, take_b) =
                                         execute_with_taker(target_taker, counter_taker, make_match);
-                                    trace!("Taker {} matched with {}", target_taker, counter_taker);
                                     for take in [take_a, take_b] {
+                                        let next = take.result.clone();
                                         batch.add_take(take);
-                                        self.on_take(take.result);
+                                        self.on_take(next);
                                     }
                                     continue;
                                 }
@@ -204,10 +205,12 @@ where
                                     trace!("Taker {} matched with {}", target_taker, maker);
                                     let (take, make) =
                                         execute_with_maker(target_taker, maker, target_side.wrap(input));
+                                    let next_take = take.result.clone();
+                                    let next_make = make.result.clone();
                                     batch.add_make(make);
                                     batch.add_take(take);
-                                    self.on_take(take.result);
-                                    self.on_make(make.result);
+                                    self.on_take(next_take);
+                                    self.on_make(next_make);
                                     continue;
                                 }
                             }
@@ -226,7 +229,7 @@ where
             trace!("{} Raw batch: {}", self.pair, batch);
             let size_post_attempt = self.state.size();
             events.push(ExecutionEvent::LiquidityBookSizePostAttempt(size_post_attempt));
-            match MatchmakingRecipe::try_from(batch, self.conf) {
+            match MatchmakingRecipe::try_from(batch, self.conf.clone()) {
                 Ok(ex_recipe) => {
                     trace!("{} Successfully formed a batch {}", self.pair, ex_recipe);
                     return (Some(ex_recipe), events);
@@ -264,8 +267,8 @@ fn execute_with_maker<Taker, Maker>(
     chunk_size: OnSide<u64>,
 ) -> (TakeInProgress<Taker>, MakeInProgress<Maker>)
 where
-    Taker: MarketTaker + TakerBehaviour + Copy,
-    Maker: MarketMaker + MakerBehavior + Copy,
+    Taker: MarketTaker + TakerBehaviour + Clone,
+    Maker: MarketMaker + MakerBehavior + Clone,
 {
     maker.swap_with_taker(target_taker, chunk_size)
 }
@@ -276,7 +279,7 @@ fn execute_with_taker<Taker, F>(
     matchmaker: F,
 ) -> (TakeInProgress<Taker>, TakeInProgress<Taker>)
 where
-    Taker: MarketTaker + TakerBehaviour + Copy,
+    Taker: MarketTaker + TakerBehaviour + Clone,
     F: FnOnce(&Taker, &Taker) -> AbsolutePrice,
 {
     let (ask, bid) = match target_taker.side() {
@@ -295,8 +298,8 @@ where
     } else {
         (quote_input, demand_base)
     };
-    let next_ask = ask.with_applied_trade(base, quote);
-    let next_bid = bid.with_applied_trade(quote, base);
+    let next_ask = ask.clone().with_applied_trade(base, quote);
+    let next_bid = bid.clone().with_applied_trade(quote, base);
     (Trans::new(ask, next_ask), Trans::new(bid, next_bid))
 }
 
@@ -321,7 +324,7 @@ where
 fn requiring_settled_state<T, M, P, U, F>(book: &mut TLB<T, M, P, U>, f: F)
 where
     M: Stable,
-    F: Fn(&mut IdleState<T, M>),
+    F: FnOnce(&mut IdleState<T, M>),
 {
     match book.state {
         TLBState::Idle(ref mut st) => f(st),
@@ -335,27 +338,27 @@ where
 
 impl<T, M, P, U> ExternalLBEvents<T, M> for TLB<T, M, P, U>
 where
-    T: MarketTaker + TakerBehaviour + Ord + Copy + Display,
-    M: MarketMaker + Stable + Copy + Display + Debug,
+    T: MarketTaker + TakerBehaviour + Ord + Clone + Display,
+    M: MarketMaker + Stable + Clone + Display + Debug,
 {
     fn advance_clocks(&mut self, new_time: u64) {
         requiring_settled_state(self, |st| st.advance_clocks(new_time))
     }
 
     fn update_taker(&mut self, fr: T) {
-        requiring_settled_state(self, |st| st.add_fragment(fr))
+        requiring_settled_state(self, |st| st.add_fragment(fr.clone()))
     }
 
     fn remove_taker(&mut self, fr: T) {
-        requiring_settled_state(self, |st| st.remove_fragment(fr))
+        requiring_settled_state(self, |st| st.remove_fragment(fr.clone()))
     }
 
     fn update_maker(&mut self, pool: M) {
-        requiring_settled_state(self, |st| st.update_pool(pool))
+        requiring_settled_state(self, |st| st.update_pool(pool.clone()))
     }
 
     fn remove_maker(&mut self, pool: M) {
-        requiring_settled_state(self, |st| st.remove_pool(pool))
+        requiring_settled_state(self, |st| st.remove_pool(pool.clone()))
     }
 }
 

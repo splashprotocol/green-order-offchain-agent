@@ -10,10 +10,10 @@ pub fn max_by_distance_to_spot<Fr>(
     range: AllowedPriceRange,
 ) -> Option<Fr>
 where
-    Fr: MarketTaker + Ord + Copy,
+    Fr: MarketTaker + Ord + Clone,
 {
-    let best_bid = fragments.bids.first().and_then(|tk| range.test_bid(*tk));
-    let best_ask = fragments.asks.first().and_then(|tk| range.test_ask(*tk));
+    let best_bid = fragments.bids.first().and_then(|tk| range.test_bid(tk.clone()));
+    let best_ask = fragments.asks.first().and_then(|tk| range.test_ask(tk.clone()));
     let choice = match (best_ask, best_bid) {
         (Some(ask), Some(bid)) => {
             let abs_price = AbsolutePrice::from(spot_price).to_signed();
@@ -52,13 +52,13 @@ where
 
 pub fn max_by_volume<Fr>(fragments: &mut MarketTakers<Fr>, range: AllowedPriceRange) -> Option<Fr>
 where
-    Fr: MarketTaker + Ord + Copy,
+    Fr: MarketTaker + Ord + Clone,
 {
-    let best_bid = fragments.bids.first().and_then(|tk| range.test_bid(*tk));
-    let best_ask = fragments.asks.first().and_then(|tk| range.test_ask(*tk));
+    let best_bid = fragments.bids.first().and_then(|tk| range.test_bid(tk.clone()));
+    let best_ask = fragments.asks.first().and_then(|tk| range.test_ask(tk.clone()));
     let choice = match (best_ask, best_bid) {
         (Some(ask), Some(bid)) => {
-            let choice = _max_by_volume(ask, bid, None);
+            let choice = _max_by_volume(ask.clone(), bid.clone(), None);
             if choice == ask {
                 fragments.insert(bid);
             } else {

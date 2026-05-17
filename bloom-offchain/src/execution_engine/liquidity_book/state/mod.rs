@@ -37,8 +37,8 @@ impl<T, M: Stable> IdleState<T, M> {
 
 impl<T, M> IdleState<T, M>
 where
-    T: MarketTaker + TakerBehaviour + Ord + Copy + Display,
-    M: MarketMaker + Stable + Copy + Display + Debug,
+    T: MarketTaker + TakerBehaviour + Ord + Clone + Display,
+    M: MarketMaker + Stable + Clone + Display + Debug,
 {
     pub fn advance_clocks(&mut self, new_time: u64) {
         self.takers.advance_clocks(new_time)
@@ -92,7 +92,7 @@ impl<T, M: Stable> PartialPreviewState<T, M> {
 impl<T, M: Stable> PartialPreviewState<T, M>
 where
     T: MarketTaker + Ord,
-    M: Copy,
+    M: Clone,
 {
     fn commit(&mut self) -> IdleState<T, M> {
         trace!(target: "state", "PartialPreviewState::commit");
@@ -187,7 +187,7 @@ impl<Fr, Pl: Stable> PreviewState<Fr, Pl> {
 impl<Fr, Pl> PreviewState<Fr, Pl>
 where
     Fr: MarketTaker + Ord,
-    Pl: Stable + Copy,
+    Pl: Stable + Clone,
 {
     fn commit(&mut self) -> IdleState<Fr, Pl> {
         trace!(target: "state", "PreviewState::commit");
@@ -364,7 +364,7 @@ impl<T, M: Stable> TLBState<T, M> {
 
 impl<T, M: Stable> TLBState<T, M>
 where
-    T: MarketTaker + Ord + Copy,
+    T: MarketTaker + Ord + Clone,
 {
     fn active_fragments(&self) -> &MarketTakers<T> {
         match self {
@@ -377,8 +377,8 @@ where
 
 impl<T, M> TLBState<T, M>
 where
-    T: MarketTaker + Ord + Copy,
-    M: Stable + Copy,
+    T: MarketTaker + Ord + Clone,
+    M: Stable + Clone,
 {
     pub fn commit(&mut self) {
         match self {
@@ -465,8 +465,8 @@ where
 
 impl<T, M, U> TLBState<T, M>
 where
-    T: MarketTaker<U = U> + Ord + Copy + Display,
-    M: MarketMaker + Stable + Copy,
+    T: MarketTaker<U = U> + Ord + Clone + Display,
+    M: MarketMaker + Stable + Clone,
     U: PartialOrd,
 {
     pub fn show_state(&self) -> String
@@ -598,7 +598,7 @@ where
             TLBState::PartialPreview(busy_st) => {
                 let active_fragments = &mut busy_st.takers_preview.active;
                 if let Some(choice) = f(active_fragments) {
-                    busy_st.consumed_active_takers.push(choice);
+                    busy_st.consumed_active_takers.push(choice.clone());
                     Some(choice)
                 } else {
                     None
@@ -613,7 +613,7 @@ where
         if needs_transition {
             let mut busy_st = PartialPreviewState::new(0);
             self.move_into_partial_preview(&mut busy_st);
-            busy_st.consumed_active_takers.push(res.unwrap());
+            busy_st.consumed_active_takers.push(res.clone().unwrap());
             mem::swap(self, &mut TLBState::PartialPreview(busy_st));
         }
 
@@ -636,7 +636,7 @@ where
     pub fn best_market_maker(&self) -> Option<&M>
     where
         T: MarketTaker,
-        M: MarketMaker + Stable + Copy,
+        M: MarketMaker + Stable + Clone,
     {
         self.pools().values.values().max_by_key(|p| p.quality())
     }
@@ -650,7 +650,7 @@ pub struct FillPreview {
 
 pub fn dummy_swap<T, M>(taker: &T, demand: u64, side: Side, maker: &M) -> Option<(M::StableId, FillPreview)>
 where
-    T: MarketTaker + TakerBehaviour + Copy,
+    T: MarketTaker + TakerBehaviour + Clone,
     M: MarketMaker + Stable,
 {
     let real_price = maker.effective_price(taker, side.wrap(demand))?;
@@ -671,7 +671,7 @@ pub fn try_optimized_swap<T, M>(
     maker: &M,
 ) -> Option<(M::StableId, FillPreview)>
 where
-    T: MarketTaker + TakerBehaviour + Copy,
+    T: MarketTaker + TakerBehaviour + Clone,
     M: MarketMaker + Stable,
 {
     let AvailableLiquidity { input, output } = maker.available_liquidity_on_side(side.wrap(price))?;
@@ -681,7 +681,7 @@ where
             Side::Bid => AbsolutePrice::new(input, output),
             Side::Ask => AbsolutePrice::new(output, input),
         })?;
-    if input > 0 && demand >= input {
+    if input > 0 && demand == input {
         return Some((
             maker.stable_id(),
             FillPreview {
@@ -695,7 +695,7 @@ where
 
 impl<T, M> TLBState<T, M>
 where
-    M: Stable + Copy,
+    M: Stable + Clone,
 {
     pub fn preselect_market_maker(
         &self,
@@ -706,7 +706,7 @@ where
         target_taker: &T,
     ) -> Option<(M::StableId, FillPreview)>
     where
-        T: MarketTaker + TakerBehaviour + Copy,
+        T: MarketTaker + TakerBehaviour + Clone,
         M: MarketMaker,
     {
         let pools = self
@@ -731,7 +731,7 @@ where
 
     pub fn pick_maker_by_id(&mut self, pid: &M::StableId) -> Option<M>
     where
-        T: MarketTaker + Ord + Copy,
+        T: MarketTaker + Ord + Clone,
     {
         self.pick_maker(|pools| pools.values.remove(pid))
     }
@@ -740,7 +740,7 @@ where
     fn pick_maker<F>(&mut self, f: F) -> Option<M>
     where
         F: FnOnce(&mut MarketMakers<M>) -> Option<M>,
-        T: MarketTaker + Ord + Copy,
+        T: MarketTaker + Ord + Clone,
     {
         match self {
             // Transit into PartialPreview if state is untouched yet
@@ -777,7 +777,7 @@ fn pick_best_fr_either<T, U>(
     index_price: Option<AbsolutePrice>,
 ) -> Option<T>
 where
-    T: MarketTaker<U = U> + Ord + Copy,
+    T: MarketTaker<U = U> + Ord + Clone,
     U: PartialOrd,
 {
     let best_bid = active_frontier.bids.pop_first();
@@ -805,7 +805,7 @@ where
 
 fn try_pick_fr<T, F>(active_frontier: &mut MarketTakers<T>, side: Side, test: F) -> Option<T>
 where
-    T: MarketTaker + Copy + Ord,
+    T: MarketTaker + Clone + Ord,
     F: FnOnce(&T) -> bool,
 {
     let side = match side {
@@ -842,7 +842,7 @@ impl<T> Chronology<T> {
 
 impl<T> Chronology<T>
 where
-    T: MarketTaker + TakerBehaviour + Ord + Copy,
+    T: MarketTaker + TakerBehaviour + Ord + Clone,
 {
     fn advance_clocks(&mut self, new_time: u64) {
         let new_slot = self
@@ -986,10 +986,10 @@ impl<M: Stable> MarketMakers<M> {
 
 impl<M> MarketMakers<M>
 where
-    M: MarketMaker + Stable + Copy,
+    M: MarketMaker + Stable + Clone,
 {
     pub fn update_pool(&mut self, pool: M) {
-        if let Some(old_pool) = self.values.insert(pool.stable_id(), pool) {
+        if let Some(old_pool) = self.values.insert(pool.stable_id(), pool.clone()) {
             trace!(target: "state", "removing old pool {}", old_pool.stable_id());
             self.quality_index.remove(&old_pool.quality());
         }
@@ -1002,7 +1002,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, derive_more::Display, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, derive_more::Display, Serialize, Deserialize)]
 #[display("LiquidityBookSize(num_active_takers= {}, num_active_makers= {}, num_idle_takers= {}, num_idle_makers= {})", num_active_takers, num_active_makers, num_idle_takers, num_idle_makers)]
 pub struct LiquidityBookSize {
     pub num_active_takers: usize,
@@ -1208,7 +1208,7 @@ pub mod tests {
 
             fn effective_price<Taker>(&self, _: &Taker, _: OnSide<u64>) -> Option<AbsolutePrice>
             where
-                Taker: MarketTaker + TakerBehaviour + Copy,
+                Taker: MarketTaker + TakerBehaviour + Clone,
             {
                 Some(self.effective_price)
             }
@@ -1258,6 +1258,108 @@ pub mod tests {
         let selected = st.preselect_market_maker(taker.price(), taker.input(), taker.side(), false, &taker);
 
         assert_eq!(selected.map(|(id, _)| id), Some(2));
+    }
+
+    #[test]
+    fn optimized_market_maker_preview_rejects_partial_input() {
+        #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+        struct OptimizedPreviewPool {
+            id: u8,
+            available_input: u64,
+            available_output: u64,
+            price: AbsolutePrice,
+        }
+
+        impl Display for OptimizedPreviewPool {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                f.write_str(&format!("OptimizedPreviewPool({})", self.id))
+            }
+        }
+
+        impl Stable for OptimizedPreviewPool {
+            type StableId = u8;
+
+            fn stable_id(&self) -> Self::StableId {
+                self.id
+            }
+
+            fn is_quasi_permanent(&self) -> bool {
+                true
+            }
+        }
+
+        impl MarketMaker for OptimizedPreviewPool {
+            type U = u64;
+
+            fn static_price(&self) -> SpotPrice {
+                self.price.into()
+            }
+
+            fn real_price(&self, _: OnSide<u64>) -> Option<AbsolutePrice> {
+                Some(self.price)
+            }
+
+            fn effective_price<Taker>(&self, _: &Taker, _: OnSide<u64>) -> Option<AbsolutePrice>
+            where
+                Taker: MarketTaker + TakerBehaviour + Clone,
+            {
+                Some(self.price)
+            }
+
+            fn quality(&self) -> PoolQuality {
+                PoolQuality::from(1u128)
+            }
+
+            fn marginal_cost_hint(&self) -> Self::U {
+                0
+            }
+
+            fn liquidity(&self) -> AbsoluteReserves {
+                AbsoluteReserves {
+                    base: self.available_input,
+                    quote: self.available_output,
+                }
+            }
+
+            fn available_liquidity_on_side(&self, _: OnSide<AbsolutePrice>) -> Option<AvailableLiquidity> {
+                Some(AvailableLiquidity {
+                    input: self.available_input,
+                    output: self.available_output,
+                })
+            }
+
+            fn estimated_trade(&self, _: OnSide<u64>) -> Option<AvailableLiquidity> {
+                None
+            }
+
+            fn is_active(&self) -> bool {
+                true
+            }
+        }
+
+        let price = AbsolutePrice::new_unsafe(1, 1);
+        let taker = SimpleOrderPF::new(Side::Ask, 100, price, 0, 0);
+        let partial_pool = OptimizedPreviewPool {
+            id: 1,
+            available_input: 60,
+            available_output: 60,
+            price,
+        };
+        let full_pool = OptimizedPreviewPool {
+            id: 2,
+            available_input: 100,
+            available_output: 100,
+            price,
+        };
+
+        assert!(
+            super::try_optimized_swap(&taker, price, taker.input(), taker.side(), &partial_pool).is_none()
+        );
+        assert_eq!(
+            super::try_optimized_swap(&taker, price, taker.input(), taker.side(), &full_pool)
+                .map(|(id, preview)| (id, preview.input)),
+            Some((2, 100))
+        );
     }
 
     #[test]

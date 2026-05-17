@@ -127,8 +127,8 @@ impl CardanoRecipeInterpreter {
 impl<'a, T, M, Ctx> RecipeInterpreter<T, M, Ctx, OutputRef, FinalizedTxOut, SignedTxBuilder>
     for CardanoRecipeInterpreter
 where
-    T: MarketTaker + TakerBehaviour + Copy + Debug,
-    M: Copy + Debug,
+    T: MarketTaker + TakerBehaviour + Clone + Debug,
+    M: Clone + Debug,
     Magnet<Take<T, FinalizedTxOut>>: BatchExec<ExecutionState, EffectPreview<T>, Ctx>,
     Magnet<Make<M, FinalizedTxOut>>: BatchExec<ExecutionState, EffectPreview<M>, Ctx>,
     Ctx: Clone + Sized + Has<Collateral> + Has<NetworkId> + Has<OperatorRewardAddress>,
@@ -260,8 +260,8 @@ fn execute_recipe<Tk, Mk, Ctx>(
     ExecuteRecipeError,
 >
 where
-    Tk: MarketTaker + TakerBehaviour + Copy,
-    Mk: Copy,
+    Tk: MarketTaker + TakerBehaviour + Clone,
+    Mk: Clone,
     Magnet<Take<Tk, FinalizedTxOut>>: BatchExec<ExecutionState, EffectPreview<Tk>, Ctx>,
     Magnet<Make<Mk, FinalizedTxOut>>: BatchExec<ExecutionState, EffectPreview<Mk>, Ctx>,
     Ctx: Clone + Sized + Has<Collateral> + Has<NetworkId> + Has<OperatorRewardAddress>,
@@ -398,6 +398,11 @@ fn decide_fee_correction(
 ) -> FeeCorrection {
     if fee_mismatch == 0 {
         FeeCorrection::Complete
+    } else if reserved_tx_fee == 0 {
+        debug!(
+            "fee correction decision: complete without taker budget; transaction fee will be paid from funding change"
+        );
+        FeeCorrection::Complete
     } else if take_residual_fee && fee_mismatch > 0 {
         debug!(
             "fee correction decision: keep recipe and accumulate residue by {}",
@@ -502,7 +507,7 @@ fn balance_fee<Fr, Pl, Bearer>(
     mut instructions: Vec<Execution<Fr, Pl, Bearer>>,
 ) -> Vec<Execution<Fr, Pl, Bearer>>
 where
-    Fr: MarketTaker + TakerBehaviour + Copy,
+    Fr: MarketTaker + TakerBehaviour + Clone,
 {
     for i in &mut instructions {
         if let Either::Left(take) = i {
@@ -530,8 +535,8 @@ fn execute<Tk, Mk, Ctx>(
     instructions: Vec<Execution<Tk, Mk, FinalizedTxOut>>,
 ) -> (ExecutionState, Vec<EffectPreview<Either<Tk, Mk>>>, Ctx)
 where
-    Tk: Copy,
-    Mk: Copy,
+    Tk: Clone,
+    Mk: Clone,
     Magnet<Take<Tk, FinalizedTxOut>>: BatchExec<ExecutionState, EffectPreview<Tk>, Ctx>,
     Magnet<Make<Mk, FinalizedTxOut>>: BatchExec<ExecutionState, EffectPreview<Mk>, Ctx>,
     Ctx: Clone,

@@ -12,23 +12,9 @@ members = [
     "cardano-explorer",
     "bloom-offchain",
     "bloom-offchain-cardano",
-    "bloom-cardano-agent",
-    "snek-cardano-agent",
+    "green-order-cardano-agent",
     "bloom-derivation",
-    "cardano-offchain-stableswap",
-    "splash-dao-administration",
-    "splash-dao-agent",
-    "splash-dao-offchain",
     "spectrum-streaming",
-    "engine-telemetry",
-    "cardano-mempool-proxy",
-    "cardano-utxo-monitor",
-    "graphite",
-    "splash-lp-indexer",
-    "intent-relay",
-    "splash-testing",
-    "splash-reward-distributor",
-    "splash-yf-offchain"
 ]
 
 [profile.release]

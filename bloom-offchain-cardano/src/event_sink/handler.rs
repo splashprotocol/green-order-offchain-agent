@@ -1710,11 +1710,11 @@ mod tests {
 
     fn mainnet_handler_context() -> HandlerContextProto {
         let deployment: DeployedValidators = serde_json::from_str(include_str!(
-            "../../../bloom-cardano-agent/resources/mainnet.deployment.json"
+            "../../../green-order-cardano-agent/resources/mainnet.deployment.json"
         ))
         .unwrap();
         let validation_rules: ValidationRules = serde_json::from_str(include_str!(
-            "../../../bloom-cardano-agent/resources/validation-rules.json.template"
+            "../../../green-order-cardano-agent/resources/validation-rules.json.template"
         ))
         .unwrap();
         HandlerContextProto {

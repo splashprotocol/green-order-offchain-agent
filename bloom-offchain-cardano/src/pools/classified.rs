@@ -51,10 +51,10 @@ impl ClassifiedPool {
 
     fn no_trade<Taker>(self, target_taker: Taker) -> (TakeInProgress<Taker>, MakeInProgress<Self>)
     where
-        Taker: Copy,
+        Taker: Clone,
     {
         (
-            Trans::new(target_taker, Next::Succ(target_taker)),
+            Trans::new(target_taker.clone(), Next::Succ(target_taker)),
             Trans::new(self, Next::Succ(self)),
         )
     }
@@ -135,8 +135,8 @@ impl MakerBehavior for ClassifiedPool {
         input: OnSide<u64>,
     ) -> (TakeInProgress<Taker>, MakeInProgress<Self>)
     where
-        Taker: MarketTaker + TakerBehaviour + Copy,
-        Self: MarketMaker + MakerBehavior + Copy,
+        Taker: MarketTaker + TakerBehaviour + Clone,
+        Self: MarketMaker + MakerBehavior + Clone,
     {
         if !self.fee_applicable(&target_taker) {
             return default_swap_with_taker(target_taker, self, input);
@@ -163,7 +163,7 @@ impl MakerBehavior for ClassifiedPool {
             };
             let make = Trans::new(self, next_pool);
             let trade_output = make.loss().map(|val| val.unwrap()).unwrap_or(0);
-            let next_taker = target_taker.with_applied_trade(gross_input, trade_output);
+            let next_taker = target_taker.clone().with_applied_trade(gross_input, trade_output);
             return (Trans::new(target_taker, next_taker), make);
         }
 
@@ -188,7 +188,7 @@ impl MakerBehavior for ClassifiedPool {
                 Next::Term(term) => Next::Term(term),
             };
             let make = Trans::new(self, next_pool);
-            let next_taker = target_taker.with_applied_trade(gross_input, net_output);
+            let next_taker = target_taker.clone().with_applied_trade(gross_input, net_output);
             return (Trans::new(target_taker, next_taker), make);
         }
 
@@ -209,7 +209,7 @@ impl MarketMaker for ClassifiedPool {
 
     fn effective_price<Taker>(&self, taker: &Taker, input: OnSide<u64>) -> Option<AbsolutePrice>
     where
-        Taker: MarketTaker + TakerBehaviour + Copy,
+        Taker: MarketTaker + TakerBehaviour + Clone,
     {
         if !self.fee_applicable(taker) {
             return self.inner.real_price(input);

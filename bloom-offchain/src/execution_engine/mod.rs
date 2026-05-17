@@ -141,16 +141,16 @@ pub fn execution_part_stream<
 where
     Upstream: Stream<Item = (Pair, Event<CompOrd, SpecOrd, Pool, Bearer, Ver, LedgerCx>)> + Unpin + 'a,
     Funding: Stream<Item = FundingEvent<Bearer>> + Unpin + 'a,
-    Pair: Copy + Eq + Ord + Hash + Display + Unpin + 'a,
-    StableId: Copy + Eq + Hash + Debug + Display + Unpin + Send + Sync + 'a,
-    Ver: Copy + Eq + Hash + Display + Unpin + Send + Sync + Serialize + DeserializeOwned + 'a,
-    Pool: Stable<StableId = StableId> + Copy + Debug + Unpin + Display + 'a,
-    CompOrd: Stable<StableId = StableId> + MarketTaker<U = ExUnits> + Copy + Debug + Unpin + Display + 'a,
+    Pair: Copy + Clone + Eq + Ord + Hash + Display + Unpin + 'a,
+    StableId: Copy + Clone + Eq + Hash + Debug + Display + Unpin + Send + Sync + 'a,
+    Ver: Copy + Clone + Eq + Hash + Display + Unpin + Send + Sync + Serialize + DeserializeOwned + 'a,
+    Pool: Stable<StableId = StableId> + Clone + Debug + Unpin + Display + 'a,
+    CompOrd: Stable<StableId = StableId> + MarketTaker<U = ExUnits> + Clone + Debug + Unpin + Display + 'a,
     SpecOrd: SpecializedOrder<TPoolId = StableId, TOrderId = Ver> + Debug + Unpin + 'a,
     Bearer: Has<Ver> + Eq + Ord + Clone + Debug + Unpin + 'a,
     TxCandidate: Unpin + 'a,
     Tx: CanonicalHash<Hash = TxHash> + Unpin + 'a,
-    TxHash: Copy + Display + Unpin + 'a,
+    TxHash: Copy + Clone + Display + Unpin + 'a,
     Ctx: Clone + Unpin + 'a,
     MakerCtx: Clone + Unpin + 'a,
     Index: StateIndex<EvolvingEntity<CompOrd, Pool, Ver, Bearer>> + Unpin + 'a,
@@ -266,8 +266,9 @@ pub struct Executor<
 impl<S, FN, PR, SID, V, CO, SO, P, B, TC, TX, TH, C, MC, IX, TLB, L, RIR, SIR, PRV, M, E, LCX>
     Executor<S, FN, PR, SID, V, CO, SO, P, B, TC, TX, TH, C, MC, IX, TLB, L, RIR, SIR, PRV, M, E, LCX>
 where
-    V: Send + Sync,
-    SID: Send + Sync,
+    PR: Copy,
+    V: Copy + Send + Sync,
+    SID: Copy + Send + Sync,
 {
     fn new(
         index: IX,
@@ -315,7 +316,12 @@ where
     /// last_engine_status for local tracking.
     fn try_send_engine_status(&mut self, status: crate::health::EngineStatus) {
         if status != self.last_engine_status {
-            trace!("Engine stream {} status: {:?} -> {:?}", self.stream_id, self.last_engine_status, status);
+            trace!(
+                "Engine stream {} status: {:?} -> {:?}",
+                self.stream_id,
+                self.last_engine_status,
+                status
+            );
         }
         let _ = self.engine_status_sink.unbounded_send((self.stream_id, status));
         self.last_engine_status = status;
@@ -323,8 +329,8 @@ where
 
     fn sync_backlog(&mut self, pair: &PR, update: Channel<OrderUpdate<Bundled<SO, B>, SO>, LCX>)
     where
-        PR: Copy + Eq + Hash + Display,
-        V: Copy + Eq + Hash + Display,
+        PR: Copy + Clone + Eq + Hash + Display,
+        V: Copy + Clone + Eq + Hash + Display,
         SO: SpecializedOrder<TOrderId = V>,
         L: HotBacklog<Bundled<SO, B>> + Maker<PR, MC>,
         MC: Clone,
@@ -356,9 +362,9 @@ where
         pair: &PR,
         transition: Ior<Either<Baked<CO, V>, Baked<P, V>>, Either<Baked<CO, V>, Baked<P, V>>>,
     ) where
-        PR: Copy + Eq + Hash + Display,
-        SID: Copy + Eq + Hash + Display + Debug,
-        V: Copy + Eq + Hash + Display + Serialize + DeserializeOwned,
+        PR: Copy + Clone + Eq + Hash + Display,
+        SID: Clone + Eq + Hash + Display + Debug,
+        V: Copy + Clone + Eq + Hash + Display + Serialize + DeserializeOwned,
         B: Clone,
         MC: Clone,
         CO: Stable<StableId = SID> + Clone,
@@ -391,9 +397,9 @@ where
 
     fn invalidate_versions(&mut self, pair: &PR, versions: HashSet<V>) -> Result<(), Vec<V>>
     where
-        PR: Copy + Eq + Hash + Display,
-        SID: Copy + Eq + Hash + Debug + Display,
-        V: Copy + Eq + Hash + Display + Serialize + DeserializeOwned,
+        PR: Copy + Clone + Eq + Hash + Display,
+        SID: Clone + Eq + Hash + Debug + Display,
+        V: Copy + Clone + Eq + Hash + Display + Serialize + DeserializeOwned,
         B: Clone + Debug,
         MC: Clone,
         CO: Stable<StableId = SID> + Clone + Display,
@@ -445,8 +451,8 @@ where
 
     fn update_state<T>(&mut self, update: Channel<Transition<Bundled<T, B>>, LCX>) -> Option<Ior<T, T>>
     where
-        SID: Copy + Eq + Hash + Display,
-        V: Copy + Eq + Hash + Display,
+        SID: Clone + Eq + Hash + Display,
+        V: Copy + Clone + Eq + Hash + Display,
         T: EntitySnapshot<StableId = SID, Version = V> + Display + Clone,
         B: Clone,
         IX: StateIndex<Bundled<T, B>>,
@@ -535,14 +541,14 @@ where
             ..
         }: ExecutionEffectsByPair<PR, CO, SO, P, V, B>,
     ) where
-        SID: Eq + Hash + Copy + Display + Debug,
-        V: Eq + Hash + Copy + Display + Serialize + DeserializeOwned,
+        SID: Eq + Hash + Clone + Display + Debug,
+        V: Eq + Hash + Clone + Display + Serialize + DeserializeOwned,
         B: Clone + Debug,
         MC: Clone,
-        PR: Eq + Hash + Copy + Display,
+        PR: Eq + Hash + Clone + Display,
         SO: SpecializedOrder<TOrderId = V>,
-        CO: Stable<StableId = SID> + Copy + Debug + Display,
-        P: Stable<StableId = SID> + Copy + Display,
+        CO: Stable<StableId = SID> + Clone + Debug + Display,
+        P: Stable<StableId = SID> + Clone + Display,
         TH: Display,
         IX: StateIndex<EvolvingEntity<CO, P, V, B>>,
         TLB: ExternalLBEvents<CO, P> + LBFeedback<CO, P> + Maker<PR, MC>,
@@ -588,14 +594,14 @@ where
             pending_effects,
         }: ExecutionEffectsByPair<PR, CO, SO, P, V, B>,
     ) where
-        SID: Eq + Hash + Copy + Display + Debug,
-        V: Eq + Hash + Copy + Display + Serialize + DeserializeOwned,
+        SID: Eq + Hash + Clone + Display + Debug,
+        V: Eq + Hash + Clone + Display + Serialize + DeserializeOwned,
         B: Clone + Debug,
         MC: Clone,
-        PR: Eq + Hash + Copy + Display,
+        PR: Eq + Hash + Clone + Display,
         SO: SpecializedOrder<TOrderId = V>,
-        CO: Stable<StableId = SID> + Copy + Display,
-        P: Stable<StableId = SID> + Copy,
+        CO: Stable<StableId = SID> + Clone + Display,
+        P: Stable<StableId = SID> + Clone,
         TH: Display,
         IX: StateIndex<EvolvingEntity<CO, P, V, B>>,
         TLB: ExternalLBEvents<CO, P> + LBFeedback<CO, P> + Maker<PR, MC>,
@@ -680,14 +686,14 @@ where
 
     fn on_linkage_failure(&mut self, focus_pair: PR, orphans: NonEmpty<Either<CO, P>>)
     where
-        SID: Eq + Hash + Copy + Display + Debug,
-        V: Eq + Hash + Copy + Display + Serialize + DeserializeOwned,
+        SID: Eq + Hash + Clone + Display + Debug,
+        V: Eq + Hash + Clone + Display + Serialize + DeserializeOwned,
         B: Clone + Debug,
         MC: Clone,
-        PR: Eq + Hash + Copy + Display,
+        PR: Eq + Hash + Clone + Display,
         SO: SpecializedOrder<TOrderId = V>,
-        CO: Stable<StableId = SID> + Copy + Display,
-        P: Stable<StableId = SID> + Copy,
+        CO: Stable<StableId = SID> + Clone + Display,
+        P: Stable<StableId = SID> + Clone,
         IX: StateIndex<EvolvingEntity<CO, P, V, B>>,
         TLB: ExternalLBEvents<CO, P> + LBFeedback<CO, P> + Maker<PR, MC>,
     {
@@ -727,7 +733,7 @@ where
 
     fn on_entity_processed(&mut self, ver: V)
     where
-        V: Copy + Eq + Hash + Display,
+        V: Copy + Clone + Eq + Hash + Display,
     {
         trace!("Saving {} to skip filter", ver);
         self.skip_filter.add(ver);
@@ -735,14 +741,14 @@ where
 
     fn on_pair_event(&mut self, pair: PR, event: Event<CO, SO, P, B, V, LCX>)
     where
-        SID: Eq + Hash + Copy + Display + Debug,
-        V: Eq + Hash + Copy + Display + Serialize + DeserializeOwned,
+        SID: Eq + Hash + Clone + Display + Debug,
+        V: Eq + Hash + Clone + Display + Serialize + DeserializeOwned,
         B: Clone + Debug,
         MC: Clone,
-        PR: Eq + Hash + Copy + Display,
+        PR: Eq + Hash + Clone + Display,
         SO: SpecializedOrder<TOrderId = V>,
-        CO: Stable<StableId = SID> + Copy + Debug + Display,
-        P: Stable<StableId = SID> + Copy + Display,
+        CO: Stable<StableId = SID> + Clone + Debug + Display,
+        P: Stable<StableId = SID> + Clone + Display,
         IX: StateIndex<EvolvingEntity<CO, P, V, B>>,
         TLB: ExternalLBEvents<CO, P> + Maker<PR, MC>,
         L: HotBacklog<Bundled<SO, B>> + Maker<PR, MC>,
@@ -792,16 +798,16 @@ impl<S, FN, PR, I, V, CO, SO, P, B, TC, TX, TH, U, C, MC, IX, TLB, L, RIR, SIR, 
 where
     S: Stream<Item = (PR, Event<CO, SO, P, B, V, LCX>)> + Unpin,
     FN: Stream<Item = FundingEvent<B>> + Unpin,
-    PR: Copy + Eq + Ord + Hash + Display + Unpin,
-    I: Copy + Eq + Hash + Debug + Display + Unpin + Send + Sync,
-    V: Copy + Eq + Hash + Display + Unpin + Send + Sync + Serialize + DeserializeOwned,
-    P: Stable<StableId = I> + Copy + Debug + Unpin + Display,
-    CO: Stable<StableId = I> + MarketTaker<U = U> + Copy + Debug + Unpin + Display,
+    PR: Copy + Clone + Eq + Ord + Hash + Display + Unpin,
+    I: Copy + Clone + Eq + Hash + Debug + Display + Unpin + Send + Sync,
+    V: Copy + Clone + Eq + Hash + Display + Unpin + Send + Sync + Serialize + DeserializeOwned,
+    P: Stable<StableId = I> + Clone + Debug + Unpin + Display,
+    CO: Stable<StableId = I> + MarketTaker<U = U> + Clone + Debug + Unpin + Display,
     SO: SpecializedOrder<TPoolId = I, TOrderId = V> + Unpin,
     B: Has<V> + Eq + Ord + Clone + Debug + Unpin,
     TC: Unpin,
     TX: CanonicalHash<Hash = TH> + Unpin,
-    TH: Copy + Display + Unpin,
+    TH: Copy + Clone + Display + Unpin,
     C: Clone + Unpin,
     MC: Clone + Unpin,
     IX: StateIndex<EvolvingEntity<CO, P, V, B>> + Unpin,
@@ -976,16 +982,16 @@ impl<S, FN, PR, ST, V, CO, SO, P, B, TC, TX, TH, U, C, MC, IX, TLB, L, RIR, SIR,
 where
     S: Stream<Item = (PR, Event<CO, SO, P, B, V, LCX>)> + Unpin,
     FN: Stream<Item = FundingEvent<B>> + Unpin,
-    PR: Copy + Eq + Ord + Hash + Display + Unpin,
-    ST: Copy + Eq + Hash + Debug + Display + Unpin + Send + Sync,
-    V: Copy + Eq + Hash + Display + Unpin + Send + Sync + Serialize + DeserializeOwned,
-    P: Stable<StableId = ST> + Copy + Debug + Unpin + Display,
-    CO: Stable<StableId = ST> + MarketTaker<U = U> + Copy + Debug + Unpin + Display,
+    PR: Copy + Clone + Eq + Ord + Hash + Display + Unpin,
+    ST: Copy + Clone + Eq + Hash + Debug + Display + Unpin + Send + Sync,
+    V: Copy + Clone + Eq + Hash + Display + Unpin + Send + Sync + Serialize + DeserializeOwned,
+    P: Stable<StableId = ST> + Clone + Debug + Unpin + Display,
+    CO: Stable<StableId = ST> + MarketTaker<U = U> + Clone + Debug + Unpin + Display,
     SO: SpecializedOrder<TPoolId = ST, TOrderId = V> + Unpin,
     B: Has<V> + Eq + Ord + Clone + Debug + Unpin,
     TC: Unpin,
     TX: CanonicalHash<Hash = TH> + Unpin,
-    TH: Copy + Display + Unpin,
+    TH: Copy + Clone + Display + Unpin,
     C: Clone + Unpin,
     MC: Clone + Unpin,
     IX: StateIndex<EvolvingEntity<CO, P, V, B>> + Unpin,

@@ -60,7 +60,7 @@ pub trait MarketMaker {
     /// Real price as seen by a specific taker.
     fn effective_price<Taker>(&self, _: &Taker, input: OnSide<u64>) -> Option<AbsolutePrice>
     where
-        Taker: MarketTaker + TakerBehaviour + Copy,
+        Taker: MarketTaker + TakerBehaviour + Clone,
     {
         self.real_price(input)
     }
@@ -93,8 +93,8 @@ pub trait MakerBehavior: Sized {
         input: OnSide<u64>,
     ) -> (TakeInProgress<Taker>, MakeInProgress<Self>)
     where
-        Taker: MarketTaker + TakerBehaviour + Copy,
-        Self: MarketMaker + MakerBehavior + Copy,
+        Taker: MarketTaker + TakerBehaviour + Clone,
+        Self: MarketMaker + MakerBehavior + Clone,
     {
         default_swap_with_taker(target_taker, self, input)
     }
@@ -106,13 +106,15 @@ pub fn default_swap_with_taker<Taker, Maker>(
     input: OnSide<u64>,
 ) -> (TakeInProgress<Taker>, MakeInProgress<Maker>)
 where
-    Taker: MarketTaker + TakerBehaviour + Copy,
-    Maker: MarketMaker + MakerBehavior + Copy,
+    Taker: MarketTaker + TakerBehaviour + Clone,
+    Maker: MarketMaker + MakerBehavior + Clone,
 {
-    let next_maker = maker.swap(input);
+    let next_maker = maker.clone().swap(input);
     let make = Trans::new(maker, next_maker);
     let trade_output = make.loss().map(|val| val.unwrap()).unwrap_or(0);
-    let next_taker = target_taker.with_applied_trade(input.unwrap(), trade_output);
+    let next_taker = target_taker
+        .clone()
+        .with_applied_trade(input.unwrap(), trade_output);
     let take = Trans::new(target_taker, next_taker);
     (take, make)
 }
