@@ -48,12 +48,15 @@ where
 }
 
 pub fn apply_account_events(index: &mut AccountIndex, events: impl IntoIterator<Item = AccountEvent>) {
+    let mut consumed_refs = Vec::new();
+    let mut produced_accounts = Vec::new();
     for event in events {
         match event {
-            AccountEvent::Consumed(output_ref) => index.observe_consumed(output_ref),
-            AccountEvent::Produced(account) => index.observe_created_or_updated(account),
+            AccountEvent::Consumed(output_ref) => consumed_refs.push(output_ref),
+            AccountEvent::Produced(account) => produced_accounts.push(account),
         }
     }
+    index.observe_transaction(consumed_refs, produced_accounts);
 }
 
 pub fn revert_account_events(index: &mut AccountIndex, events: impl IntoIterator<Item = AccountEvent>) {

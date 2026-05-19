@@ -15,8 +15,10 @@ use crate::account_events::AccountEventHandler;
 use crate::account_index::AccountIndex;
 use crate::config::AppConfig;
 use crate::context::{ExecutionContext, MakerContext};
+use crate::continuation_scanner::run_continuation_scanner;
 use crate::deployment::{GreenDeployedValidators, GreenProtocolDeployment, GreenScriptHashes};
 use crate::entity::EvolvingCardanoEntity;
+use crate::http_intent_source::{router as http_intent_router, HttpIntentState};
 use crate::intent_source::{run_tcp_intent_source, GreenIntentEvent};
 use async_primitives::beacon::Beacon;
 use bloom_offchain::execution_engine::backlog::SpecializedInterpreter;
@@ -79,11 +81,15 @@ use spectrum_streaming::{run_stream, StreamExt as StreamExtAlt};
 
 mod account_events;
 mod account_index;
+mod account_store;
 mod config;
 mod context;
+mod continuation_scanner;
 mod deployment;
 mod entity;
+mod http_intent_source;
 mod intent_source;
+mod mpf;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() {
@@ -120,6 +126,7 @@ async fn main() {
     let green_deployment = GreenProtocolDeployment::unsafe_pull(deployment, &explorer).await;
     let protocol_deployment = green_deployment.spectrum.clone();
 
+    let account_store_path = format!("{}.green-account-stores.json", config.chain_sync.db_path);
     let chain_sync_cache = Arc::new(Mutex::new(LedgerCacheRocksDB::new(config.chain_sync.db_path)));
     let chain_sync = ChainSyncClient::init(
         Arc::clone(&chain_sync_cache),
@@ -216,7 +223,9 @@ async fn main() {
     ]);
 
     let entity_index = Arc::new(Mutex::new(InMemoryEntityIndex::new(config.event_cache_ttl)));
-    let account_index = Arc::new(StdMutex::new(AccountIndex::default()));
+    let account_index = Arc::new(StdMutex::new(AccountIndex::with_persistence_path(
+        account_store_path.into(),
+    )));
     let account_event_handler = AccountEventHandler::new(
         Arc::clone(&account_index),
         GreenScriptHashes::from(&green_deployment),
@@ -228,7 +237,31 @@ async fn main() {
             Arc::clone(&account_index),
             GreenScriptHashes::from(&green_deployment),
             config.green_orders,
+            intent_pair_upd_snd.clone(),
+        ));
+    }
+    if let Some(http_listen_addr) = config.green_orders.intent_source.http_listen_addr {
+        info!("Green HTTP intent source listening on {}", http_listen_addr);
+        let app = http_intent_router(HttpIntentState {
+            account_index: Arc::clone(&account_index),
+            ctx: GreenScriptHashes::from(&green_deployment),
+            config: config.green_orders,
+            events: intent_pair_upd_snd.clone(),
+        });
+        tokio::spawn(async move {
+            let listener = tokio::net::TcpListener::bind(http_listen_addr)
+                .await
+                .expect("failed to bind green HTTP intent source");
+            axum::serve(listener, app)
+                .await
+                .expect("green HTTP intent source failed");
+        });
+    }
+    if config.green_orders.allow_partial {
+        tokio::spawn(run_continuation_scanner(
+            Arc::clone(&account_index),
             intent_pair_upd_snd,
+            std::time::Duration::from_secs(1),
         ));
     }
     let funding_index = Arc::new(Mutex::new(
@@ -296,6 +329,7 @@ async fn main() {
         dao_ctx,
         royalty_context: config.royalty_withdraw,
         account_index: Arc::clone(&account_index),
+        allow_partial: config.green_orders.allow_partial,
     };
     let context_p2 = ExecutionContext {
         time: 0.into(),
@@ -308,6 +342,7 @@ async fn main() {
         dao_ctx,
         royalty_context: config.royalty_withdraw,
         account_index: Arc::clone(&account_index),
+        allow_partial: config.green_orders.allow_partial,
     };
     let context_p3 = ExecutionContext {
         time: 0.into(),
@@ -320,6 +355,7 @@ async fn main() {
         dao_ctx,
         royalty_context: config.royalty_withdraw,
         account_index: Arc::clone(&account_index),
+        allow_partial: config.green_orders.allow_partial,
     };
     let context_p4 = ExecutionContext {
         time: 0.into(),
@@ -332,6 +368,7 @@ async fn main() {
         dao_ctx,
         royalty_context: config.royalty_withdraw,
         account_index: Arc::clone(&account_index),
+        allow_partial: config.green_orders.allow_partial,
     };
 
     let multi_book =

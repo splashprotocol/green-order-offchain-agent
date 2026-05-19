@@ -48,7 +48,8 @@
   "greenOrders": {
     "allowPartial": false,
     "intentSource": {
-      "listenAddr": "127.0.0.1:9031"
+      "listenAddr": null,
+      "httpListenAddr": "127.0.0.1:9031"
     }
   },
   "eventFeedBufferingDuration": {

@@ -12,7 +12,7 @@ use cml_chain::plutus::utils::ConstrPlutusDataEncoding;
 use cml_chain::plutus::{ConstrPlutusData, PlutusData};
 use cml_chain::transaction::TransactionOutput;
 use cml_chain::PolicyId;
-use cml_core::serialization::{LenEncoding, RawBytesEncoding, Serialize};
+use cml_core::serialization::{Deserialize as CmlDeserialize, LenEncoding, RawBytesEncoding, Serialize};
 use cml_crypto::{blake2b224, blake2b256};
 use spectrum_cardano_lib::ex_units::ExUnits;
 use spectrum_cardano_lib::output::FinalizedTxOut;
@@ -27,7 +27,7 @@ use spectrum_offchain_cardano::deployment::{test_address, DeployedScriptInfo};
 pub const ALEPH_ACCOUNT_VALIDATOR: u8 = 200;
 pub const ALEPH_BATCH_WITNESS_VALIDATOR: u8 = 201;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, serde::Serialize, serde::Deserialize)]
 pub struct AccountId([u8; 32]);
 
 impl AccountId {
@@ -113,7 +113,7 @@ pub enum AlephAccountAction {
     Direct,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AlephIntention {
     pub target_nonce_index: u16,
     pub target_nonce_value: u64,
@@ -129,6 +129,43 @@ impl AlephIntention {
     pub fn digest(&self) -> [u8; 32] {
         blake2b256(self.clone().into_pd().to_cbor_bytes().as_ref())
     }
+
+    pub fn intent_key(&self) -> Vec<u8> {
+        aleph_intent_key(self.target_nonce_index, self.target_nonce_value)
+    }
+
+    pub fn remaining_after_fill(
+        &self,
+        consumed_leaving_without_fee: u64,
+        added_arriving_without_fee: u64,
+    ) -> Option<Self> {
+        let leaving_remainder = self.leaving_amount.checked_sub(consumed_leaving_without_fee)?;
+        if leaving_remainder == 0 {
+            return None;
+        }
+        let fee_remainder = leaving_remainder
+            .checked_mul(self.fee_lovelace)?
+            .checked_div(self.leaving_amount)?;
+        Some(Self {
+            leaving_amount: leaving_remainder,
+            expected_arriving_amount: self
+                .expected_arriving_amount
+                .checked_sub(added_arriving_without_fee)?,
+            fee_lovelace: fee_remainder,
+            ..self.clone()
+        })
+    }
+}
+
+pub fn aleph_intent_key(target_nonce_index: u16, target_nonce_value: u64) -> Vec<u8> {
+    aiken_constr(
+        0,
+        vec![
+            u64::from(target_nonce_index).into_pd(),
+            target_nonce_value.into_pd(),
+        ],
+    )
+    .to_cbor_bytes()
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -208,7 +245,7 @@ fn asset_class_into_pd(asset: AssetClass) -> PlutusData {
 impl IntoPlutusData for GreenAuth {
     fn into_pd(self) -> PlutusData {
         match self {
-            GreenAuth::Path { proof } => aiken_constr(0, vec![proof.into_pd()]),
+            GreenAuth::Path { proof } => aiken_constr(0, vec![proof_plutus_data(proof)]),
             GreenAuth::Sig {
                 prefix,
                 postfix,
@@ -220,10 +257,21 @@ impl IntoPlutusData for GreenAuth {
                     prefix.into_pd(),
                     postfix.into_pd(),
                     signature.into_pd(),
-                    update_proof.into_pd(),
+                    proof_plutus_data(update_proof),
                 ],
             ),
         }
+    }
+}
+
+fn proof_plutus_data(proof: Vec<u8>) -> PlutusData {
+    if proof.is_empty() {
+        PlutusData::List {
+            list: vec![],
+            list_encoding: LenEncoding::Indefinite,
+        }
+    } else {
+        PlutusData::from_cbor_bytes(&proof).expect("green MPF proof must be CBOR-encoded PlutusData")
     }
 }
 
@@ -360,7 +408,7 @@ impl GreenIntention {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, serde::Serialize, serde::Deserialize)]
 pub struct GreenOrderId {
     account_id: AccountId,
     target_nonce_slot: u16,
@@ -427,6 +475,67 @@ impl GreenOrder {
 
 pub trait GreenAccountLookup {
     fn current_account(&self, account_id: AccountId) -> Option<FinalizedTxOut>;
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, serde::Serialize, serde::Deserialize)]
+pub struct StoreSnapshotId(pub u64);
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PlannedStoreDelta {
+    pub old_root: [u8; 32],
+    pub new_root: [u8; 32],
+    pub proof: Vec<u8>,
+    pub predicted_snapshot_id: StoreSnapshotId,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PlannedStoreCompletion {
+    pub root: [u8; 32],
+    pub proof: Vec<u8>,
+    pub predicted_snapshot_id: StoreSnapshotId,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum GreenStorePlanningError {
+    MissingAccount,
+    MissingStore,
+    RootMismatch { expected: [u8; 32], actual: [u8; 32] },
+    ExistingPendingIntent,
+    MissingPendingIntent,
+    DigestMismatch,
+    Unsupported,
+}
+
+pub trait GreenStorePlanner {
+    fn plan_sig_insert(
+        &self,
+        account_id: AccountId,
+        old_account_ref: spectrum_cardano_lib::OutputRef,
+        canonical_order_id: GreenOrderId,
+        key: Vec<u8>,
+        updated_intent: AlephIntention,
+    ) -> Result<PlannedStoreDelta, GreenStorePlanningError>;
+
+    fn plan_path_update(
+        &self,
+        account_id: AccountId,
+        old_account_ref: spectrum_cardano_lib::OutputRef,
+        key: Vec<u8>,
+        old_digest: [u8; 32],
+        updated_intent: AlephIntention,
+    ) -> Result<PlannedStoreDelta, GreenStorePlanningError>;
+
+    fn plan_path_completion(
+        &self,
+        account_id: AccountId,
+        old_account_ref: spectrum_cardano_lib::OutputRef,
+        key: Vec<u8>,
+        old_digest: [u8; 32],
+    ) -> Result<PlannedStoreCompletion, GreenStorePlanningError>;
+}
+
+pub trait GreenPartialPolicy {
+    fn allow_green_partial(&self) -> bool;
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

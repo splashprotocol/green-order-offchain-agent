@@ -39,7 +39,8 @@ use crate::execution_engine::execution_state::{ExecutionState, ScriptInputBluepr
 use crate::orders::adhoc::{AdhocFeeStructure, AdhocOrder};
 use crate::orders::green::{
     apply_full_fill_to_account_output, AlephAccountAction, AlephAccountUtxo, AlephAuthorizedIntention,
-    GreenAccountLookup, GreenAuth, GreenOrder, ALEPH_ACCOUNT_VALIDATOR, ALEPH_BATCH_WITNESS_VALIDATOR,
+    GreenAccountLookup, GreenAuth, GreenIntention, GreenOrder, GreenPartialPolicy, GreenStorePlanner,
+    ALEPH_ACCOUNT_VALIDATOR, ALEPH_BATCH_WITNESS_VALIDATOR,
 };
 use crate::orders::grid::GridOrder;
 use crate::orders::limit::LimitOrder;
@@ -488,6 +489,8 @@ impl<Ctx> BatchExec<ExecutionState, EffectPreview<GreenOrder>, Ctx>
     for Magnet<Take<GreenOrder, FinalizedTxOut>>
 where
     Ctx: GreenAccountLookup
+        + GreenStorePlanner
+        + GreenPartialPolicy
         + Has<OperatorCred>
         + Has<DeployedValidator<{ ALEPH_ACCOUNT_VALIDATOR }>>
         + Has<DeployedValidator<{ ALEPH_BATCH_WITNESS_VALIDATOR }>>
@@ -516,12 +519,10 @@ where
             target: Bundled(ord, _),
             result,
         } = trans;
-        let Next::Term(_) = result else {
-            panic!("GreenOrder partial execution is disabled in the phase-1 agent")
+        let leaving_remainder = match &result {
+            Next::Term(_) => 0,
+            Next::Succ(next) => next.current_remainder,
         };
-        if !matches!(ord.auth, GreenAuth::Sig { .. }) {
-            panic!("GreenOrder Auth::Path execution is disabled in the phase-1 agent")
-        }
         if consumed_budget != 0 {
             panic!("GreenOrder execution budget must be zero in phase 1")
         }
@@ -534,17 +535,20 @@ where
         if ord.intention.operator_key_hash != operator_hash {
             panic!("GreenOrder operator does not match runtime operator credential")
         }
-        if removed_input != ord.intention.leaving_amount {
+        if removed_input > ord.intention.leaving_amount {
             panic!(
-                "GreenOrder phase-1 execution requires full input consumption: consumed {}, expected {}",
+                "GreenOrder execution consumed more than declared input: consumed {}, expected at most {}",
                 removed_input, ord.intention.leaving_amount
             )
         }
-        if added_output < ord.intention.expected_arriving_amount {
+        if leaving_remainder == 0 && added_output < ord.intention.expected_arriving_amount {
             panic!(
                 "GreenOrder execution produced insufficient output: produced {}, expected at least {}",
                 added_output, ord.intention.expected_arriving_amount
             )
+        }
+        if leaving_remainder > 0 && !context.allow_green_partial() {
+            panic!("GreenOrder partial execution is disabled by runtime configuration")
         }
 
         let account_bearer = context
@@ -553,11 +557,14 @@ where
         let account =
             AlephAccountUtxo::try_parse(account_bearer.reference(), account_bearer.0.clone(), &context)
                 .expect("indexed GreenOrder account UTxO does not match Aleph account validator");
-        let next_state = account
-            .state
-            .clone()
-            .with_sig_full_fill_nonce(ord.intention.target_nonce_slot, ord.intention.target_nonce_value)
-            .expect("GreenOrder target nonce cannot be applied to current account state");
+        let mut next_state = match ord.auth {
+            GreenAuth::Sig { .. } => account
+                .state
+                .clone()
+                .with_sig_full_fill_nonce(ord.intention.target_nonce_slot, ord.intention.target_nonce_value)
+                .expect("GreenOrder target nonce cannot be applied to current account state"),
+            GreenAuth::Path { .. } => account.state.clone(),
+        };
 
         let account_validator = context
             .select::<DeployedValidator<{ ALEPH_ACCOUNT_VALIDATOR }>>()
@@ -573,6 +580,66 @@ where
             .iter()
             .position(|hash| *hash == witness_hash)
             .expect("Aleph batch witness script is not present in account allowlist");
+
+        let aleph_intention = ord.aleph_intention();
+        let intent_key = aleph_intention.intent_key();
+        let intent_digest = aleph_intention.digest();
+        let mut authorized_auth = ord.auth.clone();
+        let mut next_order = None;
+
+        if leaving_remainder > 0 {
+            let updated_intent = aleph_intention
+                .remaining_after_fill(removed_input, added_output)
+                .expect("partial GreenOrder execution must produce a remaining intent");
+            match &ord.auth {
+                GreenAuth::Sig {
+                    prefix,
+                    postfix,
+                    signature,
+                    ..
+                } => {
+                    let planned = context
+                        .plan_sig_insert(
+                            ord.account_id,
+                            account.output_ref,
+                            ord.id,
+                            intent_key.clone(),
+                            updated_intent.clone(),
+                        )
+                        .expect("failed to plan green Sig store insert");
+                    next_state.store_root = planned.new_root;
+                    authorized_auth = GreenAuth::Sig {
+                        prefix: prefix.clone(),
+                        postfix: postfix.clone(),
+                        signature: signature.clone(),
+                        update_proof: planned.proof.clone(),
+                    };
+                    next_order = Some(continuation_order(&ord, updated_intent, planned.proof));
+                }
+                GreenAuth::Path { .. } => {
+                    let planned = context
+                        .plan_path_update(
+                            ord.account_id,
+                            account.output_ref,
+                            intent_key.clone(),
+                            intent_digest,
+                            updated_intent.clone(),
+                        )
+                        .expect("failed to plan green Path store update");
+                    next_state.store_root = planned.new_root;
+                    authorized_auth = GreenAuth::Path {
+                        proof: planned.proof.clone(),
+                    };
+                    next_order = Some(continuation_order(&ord, updated_intent, planned.proof));
+                }
+            }
+        } else if matches!(ord.auth, GreenAuth::Path { .. }) {
+            let planned = context
+                .plan_path_completion(ord.account_id, account.output_ref, intent_key, intent_digest)
+                .expect("failed to plan green Path store completion");
+            next_state.store_root = planned.root;
+            authorized_auth = GreenAuth::Path { proof: planned.proof };
+        }
 
         let mut account_output = account.output.clone();
         apply_full_fill_to_account_output(
@@ -603,20 +670,50 @@ where
 
         let authorized = AlephAuthorizedIntention {
             intent: ord.aleph_intention(),
-            remainder: 0,
-            auth: ord.auth.clone(),
+            remainder: leaving_remainder,
+            auth: authorized_auth,
         };
-        let consumed_bundle = Bundled(ord, account.finalized_output());
+        let consumed_bundle = Bundled(ord.clone(), account.finalized_output());
 
         state.add_tx_fee(consumed_budget);
         state.add_operator_interest(consumed_fee);
-        state.tx_blueprint.add_account_io(input, account_output);
+        state.tx_blueprint.add_account_io(input, account_output.clone());
         state.tx_blueprint.add_ref_input(account_validator.reference_utxo);
         state
             .tx_blueprint
             .add_aleph_batch_intention(batch_witness, account.output_ref, authorized);
 
-        (state, ExecutionEff::Eliminated(consumed_bundle), context)
+        let effect = if let Some(next_order) = next_order {
+            ExecutionEff::Updated(consumed_bundle, Bundled(next_order, account_output))
+        } else {
+            ExecutionEff::Eliminated(consumed_bundle)
+        };
+
+        (state, effect, context)
+    }
+}
+
+fn continuation_order(
+    original: &GreenOrder,
+    intent: crate::orders::green::AlephIntention,
+    proof: Vec<u8>,
+) -> GreenOrder {
+    GreenOrder {
+        id: original.id,
+        account_id: original.account_id,
+        intention: GreenIntention {
+            input_asset: intent.leaving_asset,
+            output_asset: intent.arriving_asset,
+            leaving_amount: intent.leaving_amount,
+            expected_arriving_amount: intent.expected_arriving_amount,
+            fee_lovelace: intent.fee_lovelace,
+            target_nonce_slot: intent.target_nonce_index,
+            target_nonce_value: intent.target_nonce_value,
+            operator_key_hash: intent.operator,
+        },
+        accumulated_output: 0,
+        current_remainder: intent.leaving_amount,
+        auth: GreenAuth::Path { proof },
     }
 }
 

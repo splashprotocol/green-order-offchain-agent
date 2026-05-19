@@ -71,7 +71,22 @@ impl CheckIntegrity for AppConfig {
                 .push("Green order agent must run with o2oAllowed=false".to_string());
         }
 
+        if let Some(violation) =
+            http_intent_source_bind_violation(self.green_orders.intent_source.http_listen_addr)
+        {
+            violations.0.push(violation.to_string());
+        }
+
         violations
+    }
+}
+
+fn http_intent_source_bind_violation(addr: Option<SocketAddr>) -> Option<&'static str> {
+    let addr = addr?;
+    if addr.ip().is_loopback() {
+        None
+    } else {
+        Some("Green HTTP intent source must bind to a loopback address")
     }
 }
 
@@ -117,6 +132,17 @@ impl ExecutionConfig {
             o2o_allowed: self.o2o_allowed,
             base_step_budget,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_non_loopback_http_intent_source() {
+        assert!(http_intent_source_bind_violation(Some("0.0.0.0:9031".parse().unwrap())).is_some());
+        assert!(http_intent_source_bind_violation(Some("127.0.0.1:9031".parse().unwrap())).is_none());
     }
 }
 

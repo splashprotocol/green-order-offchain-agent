@@ -12,8 +12,8 @@ Implementation plan: `docs/plans/2026-05-15-green-order-agent-fork-prune.md`.
 ## Green order ingress
 
 The agent observes Royalty V1 pools and Aleph account UTxOs from ledger/mempool
-events. External signed intents enter through a local JSON-lines TCP source
-configured under `greenOrders.intentSource.listenAddr`.
+events. External signed intents enter through a local HTTP endpoint configured
+under `greenOrders.intentSource.httpListenAddr`.
 
 Current execution mode is intentionally full-fill only:
 
@@ -30,38 +30,30 @@ Example config:
   "greenOrders": {
     "allowPartial": false,
     "intentSource": {
-      "listenAddr": "127.0.0.1:9031"
+      "listenAddr": null,
+      "httpListenAddr": "127.0.0.1:9031"
     }
   }
 }
 ```
 
-Each line sent to the TCP source is one JSON object:
+Submit one signed intent with `POST /intents`:
 
-```json
-{
-  "accountId": "0000000000000000000000000000000000000000000000000000000000000000",
-  "originalIntentDigest": "1111111111111111111111111111111111111111111111111111111111111111",
-  "inputAsset": "00",
-  "outputAsset": "policy_id_hex_followed_by_asset_name_hex",
-  "leavingAmount": 1000000,
-  "expectedArrivingAmount": 900000,
-  "feeLovelace": 100000,
-  "targetNonceSlot": 0,
-  "targetNonceValue": 42,
-  "operatorKeyHash": "22222222222222222222222222222222222222222222222222222222",
-  "auth": {
-    "type": "sig",
-    "prefix": "",
-    "postfix": "",
-    "signature": "64_byte_signature_hex",
-    "updateProof": ""
-  }
-}
+```bash
+curl -sS -X POST http://127.0.0.1:9031/intents \
+  -H 'content-type: application/json' \
+  --data '{"accountId":"0000000000000000000000000000000000000000000000000000000000000000","originalIntentDigest":"1111111111111111111111111111111111111111111111111111111111111111","inputAsset":"00","outputAsset":"policy_id_hex_followed_by_asset_name_hex","leavingAmount":1000000,"expectedArrivingAmount":900000,"feeLovelace":100000,"targetNonceSlot":0,"targetNonceValue":42,"operatorKeyHash":"22222222222222222222222222222222222222222222222222222222","auth":{"type":"sig","prefix":"","postfix":"","signature":"64_byte_signature_hex","updateProof":""}}'
 ```
 
-The source should stay bound to localhost or a protected internal interface. It
-does admission checks, but it is not an authenticated public API.
+Accepted response:
+
+```json
+{"status":"accepted","reason":null}
+```
+
+The HTTP source must stay bound to a loopback address. It does admission checks,
+but it is not an authenticated public API. The older `listenAddr` JSON-lines TCP
+source still exists for local testing, but is disabled by default.
 
 `inputAsset` and `outputAsset` use the repository's `AssetClass` wire encoding:
 `00` for ADA, or `policy_id || asset_name` as hex for a native token.

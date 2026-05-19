@@ -5,7 +5,9 @@ use crate::deployment::GreenProtocolDeployment;
 use bloom_offchain::execution_engine::liquidity_book::config::ExecutionConfig;
 use bloom_offchain::execution_engine::types::Time;
 use bloom_offchain_cardano::orders::green::{
-    AccountId, GreenAccountLookup, ALEPH_ACCOUNT_VALIDATOR, ALEPH_BATCH_WITNESS_VALIDATOR,
+    AccountId, AlephIntention, GreenAccountLookup, GreenPartialPolicy, GreenStorePlanner,
+    GreenStorePlanningError, PlannedStoreCompletion, PlannedStoreDelta, ALEPH_ACCOUNT_VALIDATOR,
+    ALEPH_BATCH_WITNESS_VALIDATOR,
 };
 use spectrum_cardano_lib::collateral::Collateral;
 use spectrum_cardano_lib::ex_units::ExUnits;
@@ -67,6 +69,7 @@ pub struct ExecutionContext {
     pub dao_ctx: DAOContext,
     pub royalty_context: RoyaltyWithdrawContext,
     pub account_index: Arc<Mutex<AccountIndex>>,
+    pub allow_partial: bool,
 }
 
 impl Has<NetworkId> for ExecutionContext {
@@ -111,6 +114,61 @@ impl GreenAccountLookup for ExecutionContext {
             .lock()
             .expect("account index lock poisoned")
             .current(account_id)
+    }
+}
+
+impl GreenPartialPolicy for ExecutionContext {
+    fn allow_green_partial(&self) -> bool {
+        self.allow_partial
+    }
+}
+
+impl GreenStorePlanner for ExecutionContext {
+    fn plan_sig_insert(
+        &self,
+        account_id: AccountId,
+        old_account_ref: spectrum_cardano_lib::OutputRef,
+        canonical_order_id: bloom_offchain_cardano::orders::green::GreenOrderId,
+        key: Vec<u8>,
+        updated_intent: AlephIntention,
+    ) -> Result<PlannedStoreDelta, GreenStorePlanningError> {
+        self.account_index
+            .lock()
+            .expect("account index lock poisoned")
+            .plan_sig_insert(
+                account_id,
+                old_account_ref,
+                canonical_order_id,
+                key,
+                updated_intent,
+            )
+    }
+
+    fn plan_path_update(
+        &self,
+        account_id: AccountId,
+        old_account_ref: spectrum_cardano_lib::OutputRef,
+        key: Vec<u8>,
+        old_digest: [u8; 32],
+        updated_intent: AlephIntention,
+    ) -> Result<PlannedStoreDelta, GreenStorePlanningError> {
+        self.account_index
+            .lock()
+            .expect("account index lock poisoned")
+            .plan_path_update(account_id, old_account_ref, key, old_digest, updated_intent)
+    }
+
+    fn plan_path_completion(
+        &self,
+        account_id: AccountId,
+        old_account_ref: spectrum_cardano_lib::OutputRef,
+        key: Vec<u8>,
+        old_digest: [u8; 32],
+    ) -> Result<PlannedStoreCompletion, GreenStorePlanningError> {
+        self.account_index
+            .lock()
+            .expect("account index lock poisoned")
+            .plan_path_completion(account_id, old_account_ref, key, old_digest)
     }
 }
 

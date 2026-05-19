@@ -54,6 +54,7 @@ impl Default for GreenOrdersConfig {
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Default)]
 pub struct IntentSourceConfig {
     pub listen_addr: Option<SocketAddr>,
+    pub http_listen_addr: Option<SocketAddr>,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -183,7 +184,7 @@ pub async fn run_tcp_intent_source<C>(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct WireGreenIntent {
+pub(crate) struct WireGreenIntent {
     account_id: String,
     original_intent_digest: String,
     input_asset: AssetClass,
@@ -199,7 +200,7 @@ struct WireGreenIntent {
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-enum WireGreenAuth {
+pub(crate) enum WireGreenAuth {
     Sig {
         prefix: String,
         postfix: String,
@@ -210,6 +211,10 @@ enum WireGreenAuth {
     Path {
         proof: String,
     },
+}
+
+pub(crate) fn parse_wire_intent(wire: WireGreenIntent) -> Result<RawGreenIntent, ()> {
+    RawGreenIntent::try_from(wire)
 }
 
 impl TryFrom<WireGreenIntent> for RawGreenIntent {
@@ -270,11 +275,15 @@ impl<'de> Deserialize<'de> for IntentSourceConfig {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Repr {
+            #[serde(default)]
             listen_addr: Option<SocketAddr>,
+            #[serde(default)]
+            http_listen_addr: Option<SocketAddr>,
         }
         let repr = Repr::deserialize(deserializer)?;
         Ok(Self {
             listen_addr: repr.listen_addr,
+            http_listen_addr: repr.http_listen_addr,
         })
     }
 }
@@ -350,7 +359,7 @@ mod tests {
             main_key: vec![2; 33],
             co_key: None,
             cold_key_hash: [13; 28],
-            store_root: [14; 32],
+            store_root: [0; 32],
         }
     }
 
@@ -406,6 +415,53 @@ mod tests {
             },
             auth: GreenAuth::new_sig(vec![], vec![], vec![3; 64], vec![]).unwrap(),
         }
+    }
+
+    #[test]
+    fn parses_wire_sig_intent_into_raw_intent() {
+        let json = serde_json::json!({
+            "accountId": hex::encode([1u8; 32]),
+            "originalIntentDigest": hex::encode([2u8; 32]),
+            "inputAsset": "00",
+            "outputAsset": hex::encode(AssetClass::Token(token(1)).to_bytes()),
+            "leavingAmount": 1_000_000,
+            "expectedArrivingAmount": 900_000,
+            "feeLovelace": 100_000,
+            "targetNonceSlot": 0,
+            "targetNonceValue": 10,
+            "operatorKeyHash": hex::encode([7u8; 28]),
+            "auth": {
+                "type": "sig",
+                "prefix": "",
+                "postfix": "",
+                "signature": hex::encode([3u8; 64]),
+                "updateProof": ""
+            }
+        });
+
+        let wire: WireGreenIntent = serde_json::from_value(json).unwrap();
+        let raw = parse_wire_intent(wire).unwrap();
+
+        assert_eq!(account_id(1), raw.account_id);
+        assert_eq!([2u8; 32], raw.original_intent_digest);
+        assert_eq!(AssetClass::Native, raw.intention.input_asset);
+    }
+
+    #[test]
+    fn parses_http_intent_source_config() {
+        let config: GreenOrdersConfig = serde_json::from_value(serde_json::json!({
+            "allowPartial": false,
+            "intentSource": {
+                "listenAddr": null,
+                "httpListenAddr": "127.0.0.1:9031"
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            "127.0.0.1:9031".parse().ok(),
+            config.intent_source.http_listen_addr
+        );
     }
 
     #[test]
