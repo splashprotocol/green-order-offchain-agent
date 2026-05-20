@@ -3,7 +3,7 @@ use cml_chain::builders::tx_builder::{ChangeSelectionAlgo, SignedTxBuilder, Tran
 use cml_chain::transaction::TransactionOutput;
 use cml_core::serialization::StringEncoding;
 use either::Either;
-use log::{debug, info, trace, Level};
+use log::{debug, info, trace};
 use num_rational::Ratio;
 use std::fmt::{Debug, Display, Formatter};
 use tailcall::tailcall;
@@ -23,8 +23,6 @@ use spectrum_cardano_lib::{NetworkId, OutputRef};
 use spectrum_offchain::domain::{Baked, Has};
 use spectrum_offchain_cardano::constants::ADDITIONAL_FEE;
 use spectrum_offchain_cardano::creds::OperatorRewardAddress;
-use spectrum_offchain_cardano::deployment::DeployedValidator;
-use spectrum_offchain_cardano::deployment::ProtocolValidator::LimitOrderWitnessV1;
 
 use crate::execution_engine::execution_state::ExecutionState;
 use crate::execution_engine::instances::{EffectPreview, Magnet};
@@ -80,6 +78,7 @@ enum ExecuteRecipeError {
         accumulated_residue: Lovelace,
         fee_mismatch: i64,
     },
+    FeeEstimationFailed(String),
 }
 
 impl Display for ExecuteRecipeError {
@@ -108,6 +107,9 @@ impl Display for ExecuteRecipeError {
                 "fee correction exceeded retry limit at attempt {}: estimated_fee={}, reserved_tx_fee={}, updated_tx_fee={}, accumulated_residue={}, fee_mismatch={}",
                 attempt, estimated_fee, reserved_tx_fee, updated_tx_fee, accumulated_residue, fee_mismatch
             ),
+            ExecuteRecipeError::FeeEstimationFailed(err) => {
+                write!(f, "fee estimation failed: {}", err)
+            }
         }
     }
 }
@@ -292,7 +294,20 @@ where
         .add_collateral(ctx.select::<Collateral>().into())
         .unwrap();
 
-    let estimated_fee = tx_builder.min_fee(true).unwrap() + ADDITIONAL_FEE;
+    match tx_builder.min_fee(false) {
+        Ok(base_fee) => trace!("Base min_fee(false): {}", base_fee),
+        Err(err) => trace!("Base min_fee(false) failed: {:?}", err),
+    }
+    let estimated_fee = match tx_builder.min_fee(true) {
+        Ok(fee) => fee + ADDITIONAL_FEE,
+        Err(err) => {
+            info!(
+                "min_fee(true) failed while estimating execution tx fee: {:?}",
+                err
+            );
+            return Err(ExecuteRecipeError::FeeEstimationFailed(format!("{:?}", err)));
+        }
+    };
     let updated_tx_fee = reserved_tx_fee - accumulated_residue;
     let fee_mismatch = updated_tx_fee as i64 - estimated_fee as i64;
     trace!(

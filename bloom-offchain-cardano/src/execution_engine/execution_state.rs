@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Formatter};
 
 use bloom_offchain::execution_engine::funding_effect::FundingIO;
 use bloom_offchain::execution_engine::liquidity_book::types::Lovelace;
@@ -18,7 +18,6 @@ use cml_chain::{RequiredSigners, Value};
 use cml_core::serialization::RawBytesEncoding;
 use either::Either;
 use log::trace;
-use spectrum_cardano_lib::funding::OperatorFunding;
 use spectrum_cardano_lib::output::FinalizedTxOut;
 use spectrum_cardano_lib::plutus_data::IntoPlutusData;
 use spectrum_cardano_lib::transaction::TransactionOutputExtension;
@@ -238,14 +237,24 @@ impl TxBlueprint {
             (_, Either::Right((None, _))) => Ordering::Less,
             _ => Ordering::Greater,
         });
+        let mut cml_input_refs = all_io
+            .iter()
+            .filter_map(|io| match io {
+                Either::Left((input, _)) => Some(input.reference),
+                Either::Right((Some(input), _)) => Some(input.reference()),
+                Either::Right((None, _)) => None,
+            })
+            .collect::<Vec<_>>();
+        cml_input_refs.sort();
+        let cml_spend_indexes = cml_input_refs
+            .into_iter()
+            .enumerate()
+            .map(|(ix, reference)| (reference, ix))
+            .collect::<HashMap<_, _>>();
         let enumerated_io = all_io.into_iter().enumerate().collect::<Vec<_>>();
-        let inputs_ordering = TxInputsOrdering::new(HashMap::from_iter(enumerated_io.iter().filter_map(
-            |(ix, io)| match io {
-                Either::Left((i, _)) => Some((i.reference, *ix)),
-                Either::Right((Some(i), _)) => Some((i.reference(), *ix)),
-                _ => None,
-            },
-        )));
+        let inputs_ordering = TxInputsOrdering::new(HashMap::from_iter(
+            cml_spend_indexes.iter().map(|(reference, ix)| (*reference, *ix)),
+        ));
         if let Some((wit, mut intentions)) = aleph_batch_witness {
             intentions.sort_by_key(|(account_ref, _)| inputs_ordering.index_of(account_ref));
             let scaling_factor = intentions.len() as u64;
@@ -256,9 +265,27 @@ impl TxBlueprint {
             witness_scripts.insert(wit, (AlephBatchRedeemer { intentions }.into_pd(), scaling_factor));
         }
         for (ref_in, ref_utxo) in reference_inputs {
+            let script_ref_info = ref_utxo
+                .script_ref()
+                .map(|script_ref| {
+                    let hash = script_ref.hash();
+                    let raw_len = script_ref
+                        .raw_plutus_bytes()
+                        .map(|bytes| bytes.len())
+                        .unwrap_or_default();
+                    format!("script_hash={}, raw_plutus_bytes={}", hash, raw_len)
+                })
+                .unwrap_or_else(|| "no script_ref".to_string());
+            trace!(
+                "Adding reference input {}#{} ({})",
+                ref_in.transaction_id,
+                ref_in.index,
+                script_ref_info
+            );
             txb.add_reference_input(TransactionUnspentOutput::new(ref_in, ref_utxo));
         }
-        for (ix, io) in enumerated_io {
+        let mut pending_spend_exunits = Vec::new();
+        for (_, io) in enumerated_io {
             match io {
                 Either::Left((
                     ScriptInputBlueprint {
@@ -289,11 +316,16 @@ impl TxBlueprint {
                             .unwrap_or_else(|_| "_".to_string())
                     );
                     txb.add_output(output).expect("add script output ok");
-                    let ctx = ScriptContextPreview { self_index: ix };
-                    txb.set_exunits(
-                        RedeemerWitnessKey::new(RedeemerTag::Spend, ix as u64),
+                    let cml_spend_ix = *cml_spend_indexes
+                        .get(&reference)
+                        .expect("script input must have CML spend index");
+                    let ctx = ScriptContextPreview {
+                        self_index: cml_spend_ix,
+                    };
+                    pending_spend_exunits.push((
+                        RedeemerWitnessKey::new(RedeemerTag::Spend, cml_spend_ix as u64),
                         script.cost.compute(&ctx).into(),
-                    );
+                    ));
                 }
                 Either::Right((maybe_funding_input, funding_output)) => {
                     if let Some(FinalizedTxOut(utxo, reference)) = maybe_funding_input {
@@ -306,6 +338,9 @@ impl TxBlueprint {
                     txb.add_output(output).expect("add funding output ok");
                 }
             }
+        }
+        for (key, ex_units) in pending_spend_exunits {
+            txb.set_exunits(key, ex_units);
         }
         // Project common witness scripts.
         let mut witness_scripts = witness_scripts.into_iter().collect::<Vec<_>>();
@@ -321,11 +356,23 @@ impl TxBlueprint {
                 })
                 .then_with(|| lh.reference_utxo.input.index.cmp(&rh.reference_utxo.input.index))
         });
-        for (reward_ix, (wit, (rdmr, scaling_factor))) in witness_scripts.into_iter().enumerate() {
+        let mut reward_addresses = witness_scripts
+            .iter()
+            .map(|(wit, _)| {
+                cml_chain::address::RewardAddress::new(network_id.into(), Credential::new_script(wit.hash))
+            })
+            .collect::<Vec<_>>();
+        reward_addresses.sort();
+        let mut pending_reward_exunits = Vec::new();
+        for (wit, (rdmr, scaling_factor)) in witness_scripts {
             let reward_address =
                 cml_chain::address::RewardAddress::new(network_id.into(), Credential::new_script(wit.hash));
+            let reward_ix = reward_addresses
+                .iter()
+                .position(|addr| addr == &reward_address)
+                .expect("reward address must have CML reward index") as u64;
             let partial_witness = PartialPlutusWitness::new(PlutusScriptWitness::Ref(wit.hash), rdmr);
-            let withdrawal_result = SingleWithdrawalBuilder::new(reward_address, 0)
+            let withdrawal_result = SingleWithdrawalBuilder::new(reward_address.clone(), 0)
                 .plutus_script(partial_witness, vec![].into())
                 .unwrap();
             txb.add_reference_input(wit.reference_utxo);
@@ -337,10 +384,13 @@ impl TxBlueprint {
                 scaling_factor
             );
             let ex_units = wit.ex_budget + wit.marginal_cost.scale(scaling_factor);
-            txb.set_exunits(
+            pending_reward_exunits.push((
                 RedeemerWitnessKey::new(RedeemerTag::Reward, reward_ix as u64),
                 ex_units.into(),
-            );
+            ));
+        }
+        for (key, ex_units) in pending_reward_exunits {
+            txb.set_exunits(key, ex_units);
         }
         (txb, funding_io)
     }
@@ -381,6 +431,57 @@ impl TxBlueprint {
             .collect::<Vec<_>>();
         refs.sort_by(|lh, rh| self.cmp_script_refs(lh, rh));
         refs
+    }
+
+    fn add_script_ref_with_cost_for_test(
+        &mut self,
+        reference: OutputRef,
+        is_account: bool,
+        cost: spectrum_cardano_lib::ex_units::ExUnits,
+    ) {
+        if is_account {
+            self.account_script_refs.insert(reference);
+        }
+        let cml_script = cml_chain::plutus::PlutusV2Script::new(vec![reference.index() as u8]);
+        let hash = cml_script.hash();
+        let utxo = TransactionOutput::new(
+            cml_chain::address::Address::Enterprise(cml_chain::address::EnterpriseAddress::new(
+                spectrum_cardano_lib::NetworkId::PREPROD.into(),
+                Credential::new_script(hash),
+            )),
+            Value::from(3_000_000),
+            None,
+            None,
+        );
+        let output = TransactionOutput::new(utxo.address().clone(), Value::from(2_000_000), None, None);
+        self.script_io.push((
+            ScriptInputBlueprint {
+                reference,
+                utxo: utxo.clone(),
+                script: ScriptWitness {
+                    hash,
+                    cost: spectrum_offchain_cardano::script::ready_cost(cost),
+                },
+                redeemer: spectrum_offchain_cardano::script::ready_redeemer(PlutusData::new_integer(
+                    reference.index().into(),
+                )),
+                required_signers: vec![].into(),
+            },
+            output,
+        ));
+        self.reference_inputs.insert((
+            OutputRef::new(
+                cml_crypto::TransactionHash::from([reference.index() as u8; 32]),
+                0,
+            )
+            .into(),
+            TransactionOutput::new(
+                test_output().address().clone(),
+                Value::from(2_000_000),
+                None,
+                Some(cml_chain::Script::new_plutus_v2(cml_script)),
+            ),
+        ));
     }
 }
 
@@ -426,7 +527,11 @@ mod test {
     use cml_chain::plutus::PlutusV2Script;
     use cml_core::serialization::Deserialize;
     use cml_crypto::TransactionHash;
+    use spectrum_cardano_lib::ex_units::ExUnits;
+    use spectrum_cardano_lib::output::FinalizedTxOut;
+    use spectrum_cardano_lib::protocol_params::constant_tx_builder;
     use spectrum_cardano_lib::OutputRef;
+    use spectrum_offchain_cardano::creds::OperatorRewardAddress;
 
     #[test]
     fn hash_script_cml() {
@@ -445,6 +550,55 @@ mod test {
         blueprint.add_account_ordered_ref_for_test(account_ref);
 
         assert_eq!(vec![account_ref, pool_ref], blueprint.ordered_refs_for_test());
+    }
+
+    #[test]
+    fn canonical_cml_spend_indexes_receive_exunits() {
+        let mut blueprint = super::TxBlueprint::new();
+        let pool_ref = OutputRef::new(TransactionHash::from([2; 32]), 2);
+        let account_ref = OutputRef::new(TransactionHash::from([9; 32]), 1);
+
+        blueprint.add_script_ref_with_cost_for_test(pool_ref, false, ExUnits { mem: 30, steps: 40 });
+        blueprint.add_script_ref_with_cost_for_test(account_ref, true, ExUnits { mem: 10, steps: 20 });
+
+        let operator_funding = FinalizedTxOut(
+            super::test_output(),
+            OutputRef::new(TransactionHash::from([0xaa; 32]), 0),
+        );
+        let operator_address = OperatorRewardAddress(super::test_output().address().clone());
+
+        let (tx_builder, _) = blueprint.project_onto_builder(
+            constant_tx_builder(),
+            spectrum_cardano_lib::NetworkId::PREPROD,
+            operator_address,
+            operator_funding,
+            0,
+        );
+        let redeemers = tx_builder
+            .build_for_evaluation(
+                cml_chain::builders::tx_builder::ChangeSelectionAlgo::Default,
+                super::test_output().address(),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+        let cml_chain::plutus::Redeemers::ArrLegacyRedeemer {
+            arr_legacy_redeemer: redeemers,
+            ..
+        } = redeemers
+        else {
+            panic!("expected legacy redeemers");
+        };
+
+        assert_eq!(2, redeemers.len());
+        assert_eq!(cml_chain::plutus::RedeemerTag::Spend, redeemers[0].tag);
+        assert_eq!(0, redeemers[0].index);
+        assert_eq!(30, redeemers[0].ex_units.mem);
+        assert_eq!(40, redeemers[0].ex_units.steps);
+        assert_eq!(cml_chain::plutus::RedeemerTag::Spend, redeemers[1].tag);
+        assert_eq!(1, redeemers[1].index);
+        assert_eq!(10, redeemers[1].ex_units.mem);
+        assert_eq!(20, redeemers[1].ex_units.steps);
     }
 
     const SCRIPT: &str = "59041459041101000033232323232323232322222323253330093232533300b003132323300100100222533301100114a02646464a66602266ebc0380045288998028028011808801180a80118098009bab301030113011301130113011301130090011323232533300e3370e900118068008991919299980899b8748000c0400044c8c8c8c8c94ccc0594ccc05802c400852808008a503375e601860260046034603660366036603660366036603660366036602602266ebcc020c048c020c048008c020c048004c060dd6180c180c980c9808804980b80098078008b19191980080080111299980b0008a60103d87a80001323253330153375e6018602600400c266e952000330190024bd70099802002000980d001180c0009bac3007300e0063014001300c001163001300b0072301230130013322323300100100322533301200114a026464a66602266e3c008014528899802002000980b0011bae3014001375860206022602260226022602260226022602260120026eb8c040c044c044c044c044c044c044c044c044c044c044c02401cc004c0200108c03c004526136563370e900118049baa003323232533300a3370e90000008991919191919191919191919191919191919191919191919299981298140010991919191924c646600200200c44a6660560022930991980180198178011bae302d0013253330263370e9000000899191919299981698180010991924c64a66605866e1d20000011323253330313034002132498c94ccc0bccdc3a400000226464a666068606e0042649318150008b181a80098168010a99981799b87480080044c8c8c8c8c8c94ccc0e0c0ec00852616375a607200260720046eb4c0dc004c0dc008dd6981a80098168010b18168008b181900098150018a99981619b874800800454ccc0bcc0a800c5261616302a002302300316302e001302e002302c00130240091630240083253330253370e9000000899191919299981618178010a4c2c6eb4c0b4004c0b4008dd6981580098118060b1811805980d806180d0098b1bac30260013026002375c60480026048004604400260440046eb4c080004c080008c078004c078008c070004c070008dd6980d000980d0011bad30180013018002375a602c002602c004602800260280046eb8c048004c048008dd7180800098040030b1804002919299980519b87480000044c8c8c8c94ccc044c05000852616375c602400260240046eb8c040004c02000858c0200048c94ccc024cdc3a400000226464a66601c60220042930b1bae300f0013007002153330093370e900100089919299980718088010a4c2c6eb8c03c004c01c00858c01c0048c014dd5000918019baa0015734aae7555cf2ab9f5740ae855d126126d8799fd87a9f581ce7feddaece029040c973d5bf806fa9497314c0a63dfdc47fc47ac557ffff0001";
