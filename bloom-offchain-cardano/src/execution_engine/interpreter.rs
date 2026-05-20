@@ -142,7 +142,7 @@ where
         ctx: Ctx,
     ) -> ExecutionResult<T, M, OutputRef, FinalizedTxOut, SignedTxBuilder> {
         let (tx_builder, effects, funding_io_preview, ctx) =
-            execute_recipe(funding, self.take_residual_fee, ctx, instructions, 0, 0)
+            execute_recipe(funding, self.take_residual_fee, ctx, instructions, 0, 0, 0)
                 .unwrap_or_else(|err| panic!("fee correction failed: {}", err));
 
         let mut order_of_execution = vec![];
@@ -251,6 +251,7 @@ fn execute_recipe<Tk, Mk, Ctx>(
     ctx: Ctx,
     instructions: Vec<Execution<Tk, Mk, FinalizedTxOut>>,
     accumulated_residue: Lovelace,
+    operator_fee_paid_from_interest: Lovelace,
     attempt: u8,
 ) -> Result<
     (
@@ -270,8 +271,8 @@ where
 {
     let state = ExecutionState::new();
     debug!(
-        "fee correction attempt {}: take_residual_fee={}, accumulated_residue={}",
-        attempt, take_residual_fee, accumulated_residue
+        "fee correction attempt {}: take_residual_fee={}, accumulated_residue={}, operator_fee_paid_from_interest={}",
+        attempt, take_residual_fee, accumulated_residue, operator_fee_paid_from_interest
     );
     let (
         ExecutionState {
@@ -283,12 +284,18 @@ where
         ctx,
     ) = execute(ctx, state, Vec::new(), instructions.clone());
     trace!("Going to interpret blueprint: {}", tx_blueprint);
+    let gross_operator_interest = operator_interest + accumulated_residue;
+    let projected_operator_interest = operator_payout_after_network_fee(
+        reserved_tx_fee,
+        gross_operator_interest,
+        operator_fee_paid_from_interest,
+    );
     let (mut tx_builder, funding_io) = tx_blueprint.project_onto_builder(
         constant_tx_builder(),
         ctx.select::<NetworkId>(),
         ctx.select::<OperatorRewardAddress>(),
         funding.clone(),
-        operator_interest + accumulated_residue,
+        projected_operator_interest,
     );
     tx_builder
         .add_collateral(ctx.select::<Collateral>().into())
@@ -311,14 +318,35 @@ where
     let updated_tx_fee = reserved_tx_fee - accumulated_residue;
     let fee_mismatch = updated_tx_fee as i64 - estimated_fee as i64;
     trace!(
-        "Est. fee: {}, reserved fee: {}, updated fee: {}, accumulated residue: {}, mismatch: {}, funding io: {}",
+        "Est. fee: {}, reserved fee: {}, updated fee: {}, accumulated residue: {}, operator payout: {}, mismatch: {}, funding io: {}",
         estimated_fee,
         reserved_tx_fee,
         updated_tx_fee,
         accumulated_residue,
+        projected_operator_interest,
         fee_mismatch,
         funding_io_kind(&funding_io)
     );
+    let expected_operator_fee_paid = if reserved_tx_fee == 0 {
+        estimated_fee.min(gross_operator_interest)
+    } else {
+        0
+    };
+    if expected_operator_fee_paid != operator_fee_paid_from_interest {
+        debug!(
+            "fee correction attempt {} rebuilding with operator fee paid from interest: {} -> {}",
+            attempt, operator_fee_paid_from_interest, expected_operator_fee_paid
+        );
+        return execute_recipe(
+            funding,
+            take_residual_fee,
+            ctx,
+            instructions,
+            accumulated_residue,
+            expected_operator_fee_paid,
+            attempt + 1,
+        );
+    }
     if fee_mismatch != 0 && attempt >= MAX_FEE_CORRECTION_ATTEMPTS {
         info!(
             "fee correction attempt {} hit retry limit with mismatch {}",
@@ -360,6 +388,7 @@ where
                 ctx,
                 instructions,
                 updated_accumulated_residue,
+                operator_fee_paid_from_interest,
                 attempt + 1,
             )
         }
@@ -397,10 +426,23 @@ where
                     ctx,
                     instructions,
                     accumulated_residue,
+                    operator_fee_paid_from_interest,
                     attempt + 1,
                 )
             }
         }
+    }
+}
+
+fn operator_payout_after_network_fee(
+    reserved_tx_fee: Lovelace,
+    gross_operator_interest: Lovelace,
+    estimated_fee: Lovelace,
+) -> Lovelace {
+    if reserved_tx_fee == 0 {
+        gross_operator_interest.saturating_sub(estimated_fee)
+    } else {
+        gross_operator_interest
     }
 }
 
@@ -628,10 +670,22 @@ mod tests {
 
     use crate::execution_engine::execution_state::ExecutionState;
     use crate::execution_engine::interpreter::{
-        balance_fee, decide_fee_correction, execute, fee_balance_state, recipe_fee_balance_progressed,
-        FeeCorrection,
+        balance_fee, decide_fee_correction, execute, fee_balance_state, operator_payout_after_network_fee,
+        recipe_fee_balance_progressed, FeeCorrection,
     };
     use crate::orders::limit::{LimitOrder, LimitOrderValidation};
+
+    #[test]
+    fn zero_reserved_fee_pays_network_fee_from_operator_interest() {
+        assert_eq!(
+            operator_payout_after_network_fee(0, 2_000_000, 656_350),
+            1_343_650
+        );
+        assert_eq!(
+            operator_payout_after_network_fee(1_000_000, 2_000_000, 656_350),
+            2_000_000
+        );
+    }
 
     #[test]
     fn fee_overuse_balancing() {
