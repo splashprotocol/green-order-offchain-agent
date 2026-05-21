@@ -3,21 +3,21 @@
   "chainSync": {
     "startingPoint": {
       "Specific": [
-        64919047,
-        "1baae92d01e355d0cdb1908dbdecdd0c73be76a6f460c460ad6772bb9cce1bde"
+        123586375,
+        "eb2b68013946bf70a6a831c0190066b2d4c3449f9d02d2bc94da66edf8c97375"
       ]
     },
     "replayFromPoint": {
       "Specific": [
-        64919047,
-        "1baae92d01e355d0cdb1908dbdecdd0c73be76a6f460c460ad6772bb9cce1bde"
+        123586375,
+        "eb2b68013946bf70a6a831c0190066b2d4c3449f9d02d2bc94da66edf8c97375"
       ]
     },
-    "disableRollbacksUntil": 64919047,
-    "dbPath": "state"
+    "disableRollbacksUntil": 123586375,
+    "dbPath": "green-order-cardano-agent/e2e/preprod/.state/agent-chain-sync-funding"
   },
   "node": {
-    "path": "/root/cardano-vasil-docker/ipc/node.socket",
+    "path": "/Users/aleksandr/node-external/node.socket",
     "magic": 1
   },
   "txSubmissionBufferSize": 64,
@@ -27,10 +27,11 @@
     "secs": 120,
     "nanos": 0
   },
-  "operatorKey": "",
+  "operatorKey": "xprv1zzfs2eqknq4z730pg84782l2mja8vskq5zph99r37vgplpa7razfmqsey2mg08l75refatytt504gh2cl6ld52qe5k47pp5n4zaukxzc7c4cnasd825qvpm3lss3k8vjuv8gus9qpue0ulgf5uk7gr2dwy4en3va",
   "takeResidualFee": false,
+  "minOperatorFundingLovelace": 50000000,
   "explorer": {
-    "maestroKeyPath": "green-order-cardano-agent/resources/preprod.maestro.key"
+    "koiosBaseUrl": "https://preprod.koios.rest/api/v1"
   },
   "execution": {
     "executionCap": {
@@ -58,7 +59,9 @@
   },
   "partitioning": {
     "numPartitionsTotal": 1,
-    "assignedPartitions": [0]
+    "assignedPartitions": [
+      0
+    ]
   },
   "daoConfig": {
     "publicKeys": [],

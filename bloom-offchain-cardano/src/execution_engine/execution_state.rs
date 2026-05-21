@@ -141,18 +141,8 @@ impl TxBlueprint {
         }
     }
 
-    fn script_ref_priority(&self, reference: &OutputRef) -> u8 {
-        if self.account_script_refs.contains(reference) {
-            0
-        } else {
-            1
-        }
-    }
-
     fn cmp_script_refs(&self, lh: &OutputRef, rh: &OutputRef) -> Ordering {
-        self.script_ref_priority(lh)
-            .cmp(&self.script_ref_priority(rh))
-            .then_with(|| lh.cmp(rh))
+        lh.cmp(rh)
     }
 
     pub fn project_onto_builder(
@@ -170,9 +160,10 @@ impl TxBlueprint {
             mut witness_scripts,
             aleph_batch_witness,
         } = self;
+        let force_operator_funding_input = aleph_batch_witness.is_some();
         let mut all_io = script_io.into_iter().map(Either::Left).collect::<Vec<_>>();
         let funding_io = if operator_interest > 0 {
-            if operator_interest >= MIN_SAFE_LOVELACE_VALUE {
+            if operator_interest >= MIN_SAFE_LOVELACE_VALUE && !force_operator_funding_input {
                 let reward_dest_address = operator_address.address();
                 let reward_dest_coincides_with_funding = reward_dest_address == *operator_funding.0.address();
                 let operator_output =
@@ -184,6 +175,22 @@ impl TxBlueprint {
                 } else {
                     FundingIO::NotUsed(operator_funding)
                 }
+            } else if force_operator_funding_input {
+                let operator_output = operator_funding.0.clone();
+                all_io.push(Either::Right((
+                    Some(operator_funding.clone()),
+                    operator_output.clone(),
+                )));
+                if operator_interest >= MIN_SAFE_LOVELACE_VALUE {
+                    let reward_output = TransactionOutput::new(
+                        operator_address.address(),
+                        Value::from(operator_interest),
+                        None,
+                        None,
+                    );
+                    all_io.push(Either::Right((None, reward_output)));
+                }
+                FundingIO::Replaced(operator_funding, operator_output)
             } else {
                 // If funding utxo has to be used it is replaced with `operator_output`.
                 let reward_dest_address = operator_funding.0.address().clone();
@@ -196,46 +203,48 @@ impl TxBlueprint {
                 )));
                 FundingIO::Replaced(operator_funding, operator_output)
             }
+        } else if force_operator_funding_input {
+            let operator_output = operator_funding.0.clone();
+            all_io.push(Either::Right((
+                Some(operator_funding.clone()),
+                operator_output.clone(),
+            )));
+            FundingIO::Replaced(operator_funding, operator_output)
         } else {
             FundingIO::NotUsed(operator_funding)
         };
-        all_io.sort_by(|lh, rh| match (lh, rh) {
-            (Either::Left((lh_in, _)), Either::Left((rh_in, _))) => {
-                let lh_priority = if account_script_refs.contains(&lh_in.reference) {
-                    0
+        all_io.sort_by(|lh, rh| {
+            let rank = |io: &Either<
+                (ScriptInputBlueprint, TransactionOutput),
+                (Option<FinalizedTxOut>, TransactionOutput),
+            >| {
+                if force_operator_funding_input {
+                    match io {
+                        Either::Left((input, _)) if account_script_refs.contains(&input.reference) => 0,
+                        Either::Right((Some(_), _)) => 1,
+                        Either::Left(_) => 2,
+                        Either::Right((None, _)) => 3,
+                    }
                 } else {
-                    1
-                };
-                let rh_priority = if account_script_refs.contains(&rh_in.reference) {
-                    0
-                } else {
-                    1
-                };
-                lh_priority
-                    .cmp(&rh_priority)
-                    .then_with(|| lh_in.reference.cmp(&rh_in.reference))
-            }
-            (Either::Left((lh_in, _)), Either::Right((Some(rh_in), _))) => {
-                let lh_priority = if account_script_refs.contains(&lh_in.reference) {
-                    0
-                } else {
-                    1
-                };
-                lh_priority
-                    .cmp(&2)
-                    .then_with(|| lh_in.reference.cmp(&rh_in.reference()))
-            }
-            (Either::Right((Some(lh_in), _)), Either::Left((rh_in, _))) => {
-                let rh_priority = if account_script_refs.contains(&rh_in.reference) {
-                    0
-                } else {
-                    1
-                };
-                2.cmp(&rh_priority)
-                    .then_with(|| lh_in.reference().cmp(&rh_in.reference))
-            }
-            (_, Either::Right((None, _))) => Ordering::Less,
-            _ => Ordering::Greater,
+                    match io {
+                        Either::Right((None, _)) => 0,
+                        Either::Left(_) | Either::Right((Some(_), _)) => 1,
+                    }
+                }
+            };
+            rank(lh).cmp(&rank(rh)).then_with(|| match (lh, rh) {
+                (Either::Left((lh_in, _)), Either::Left((rh_in, _))) => lh_in.reference.cmp(&rh_in.reference),
+                (Either::Left((lh_in, _)), Either::Right((Some(rh_in), _))) => {
+                    lh_in.reference.cmp(&rh_in.reference())
+                }
+                (Either::Right((Some(lh_in), _)), Either::Left((rh_in, _))) => {
+                    lh_in.reference().cmp(&rh_in.reference)
+                }
+                (Either::Right((Some(lh_in), _)), Either::Right((Some(rh_in), _))) => {
+                    lh_in.reference().cmp(&rh_in.reference())
+                }
+                _ => Ordering::Equal,
+            })
         });
         let mut cml_input_refs = all_io
             .iter()
@@ -251,6 +260,19 @@ impl TxBlueprint {
             .enumerate()
             .map(|(ix, reference)| (reference, ix))
             .collect::<HashMap<_, _>>();
+        let required_signers = all_io
+            .iter()
+            .filter_map(|io| match io {
+                Either::Left((input, _)) if account_script_refs.contains(&input.reference) => {
+                    Some(input.required_signers.iter().cloned().collect::<Vec<_>>())
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect::<HashSet<_>>();
+        for signer in required_signers {
+            txb.add_required_signer(signer);
+        }
         let enumerated_io = all_io.into_iter().enumerate().collect::<Vec<_>>();
         let inputs_ordering = TxInputsOrdering::new(HashMap::from_iter(
             cml_spend_indexes.iter().map(|(reference, ix)| (*reference, *ix)),
@@ -465,7 +487,11 @@ impl TxBlueprint {
                 redeemer: spectrum_offchain_cardano::script::ready_redeemer(PlutusData::new_integer(
                     reference.index().into(),
                 )),
-                required_signers: vec![].into(),
+                required_signers: if is_account {
+                    vec![cml_crypto::Ed25519KeyHash::from([0xaa; 28])].into()
+                } else {
+                    vec![].into()
+                },
             },
             output,
         ));
@@ -498,6 +524,19 @@ fn test_output() -> TransactionOutput {
     )
 }
 
+#[cfg(test)]
+fn key_payment_output(lovelace: u64) -> TransactionOutput {
+    TransactionOutput::new(
+        cml_chain::address::Address::Enterprise(cml_chain::address::EnterpriseAddress::new(
+            spectrum_cardano_lib::NetworkId::PREPROD.into(),
+            Credential::new_pub_key(cml_crypto::Ed25519KeyHash::from([0x11; 28])),
+        )),
+        Value::from(lovelace),
+        None,
+        None,
+    )
+}
+
 pub struct ExecutionState {
     pub tx_blueprint: TxBlueprint,
     pub reserved_tx_fee: Lovelace,
@@ -524,14 +563,19 @@ impl ExecutionState {
 
 #[cfg(test)]
 mod test {
+    use bloom_offchain::execution_engine::funding_effect::FundingIO;
     use cml_chain::plutus::PlutusV2Script;
+    use cml_chain::transaction::TransactionOutput;
+    use cml_chain::Value;
     use cml_core::serialization::Deserialize;
     use cml_crypto::TransactionHash;
     use spectrum_cardano_lib::ex_units::ExUnits;
     use spectrum_cardano_lib::output::FinalizedTxOut;
     use spectrum_cardano_lib::protocol_params::constant_tx_builder;
+    use spectrum_cardano_lib::transaction::TransactionOutputExtension;
     use spectrum_cardano_lib::OutputRef;
     use spectrum_offchain_cardano::creds::OperatorRewardAddress;
+    use spectrum_offchain_cardano::deployment::DeployedValidatorErased;
 
     #[test]
     fn hash_script_cml() {
@@ -541,7 +585,7 @@ mod test {
     }
 
     #[test]
-    fn account_script_inputs_are_ordered_before_default_script_inputs() {
+    fn script_inputs_are_ordered_by_canonical_reference() {
         let mut blueprint = super::TxBlueprint::new();
         let pool_ref = OutputRef::new(TransactionHash::from([2; 32]), 0);
         let account_ref = OutputRef::new(TransactionHash::from([9; 32]), 0);
@@ -549,7 +593,7 @@ mod test {
         blueprint.add_default_ordered_ref_for_test(pool_ref);
         blueprint.add_account_ordered_ref_for_test(account_ref);
 
-        assert_eq!(vec![account_ref, pool_ref], blueprint.ordered_refs_for_test());
+        assert_eq!(vec![pool_ref, account_ref], blueprint.ordered_refs_for_test());
     }
 
     #[test]
@@ -599,6 +643,293 @@ mod test {
         assert_eq!(1, redeemers[1].index);
         assert_eq!(10, redeemers[1].ex_units.mem);
         assert_eq!(20, redeemers[1].ex_units.steps);
+    }
+
+    #[test]
+    fn aleph_batch_forces_operator_funding_replacement_even_for_large_interest() {
+        let mut blueprint = super::TxBlueprint::new();
+        let account_ref = OutputRef::new(TransactionHash::from([0x31; 32]), 0);
+        blueprint.add_script_ref_with_cost_for_test(account_ref, true, ExUnits { mem: 0, steps: 0 });
+        let witness_script = cml_chain::plutus::PlutusV2Script::new(vec![0x42]);
+        let witness_hash = witness_script.hash();
+        let witness = DeployedValidatorErased {
+            reference_utxo: cml_chain::builders::tx_builder::TransactionUnspentOutput::new(
+                OutputRef::new(TransactionHash::from([0xf0; 32]), 0).into(),
+                TransactionOutput::new(
+                    super::test_output().address().clone(),
+                    Value::from(2_000_000),
+                    None,
+                    Some(cml_chain::Script::new_plutus_v2(witness_script)),
+                ),
+            ),
+            hash: witness_hash,
+            ex_budget: ExUnits { mem: 0, steps: 0 },
+            marginal_cost: ExUnits { mem: 0, steps: 0 },
+        };
+        blueprint.add_aleph_batch_intention(
+            witness,
+            account_ref,
+            crate::orders::green::AlephAuthorizedIntention {
+                intent: crate::orders::green::AlephIntention {
+                    abi: crate::orders::green::AlephAccountAbi::Current,
+                    target_nonce_index: 0,
+                    target_nonce_value: 1,
+                    leaving_asset: spectrum_cardano_lib::AssetClass::Native,
+                    leaving_amount: 0,
+                    arriving_asset: spectrum_cardano_lib::AssetClass::Native,
+                    expected_arriving_amount: 0,
+                    fee_lovelace: 0,
+                    operator: [0; 28],
+                },
+                remainder: 0,
+                auth: crate::orders::green::GreenAuth::new_sig(vec![], vec![], vec![0; 64], vec![]).unwrap(),
+            },
+        );
+
+        let operator_funding = FinalizedTxOut(
+            super::key_payment_output(3_000_000),
+            OutputRef::new(TransactionHash::from([0x40; 32]), 0),
+        );
+        let operator_address = OperatorRewardAddress(super::key_payment_output(3_000_000).address().clone());
+
+        let (_, funding_io) = blueprint.project_onto_builder(
+            constant_tx_builder(),
+            spectrum_cardano_lib::NetworkId::PREPROD,
+            operator_address,
+            operator_funding,
+            2_000_000,
+        );
+
+        assert!(matches!(funding_io, FundingIO::Replaced(_, _)));
+    }
+
+    #[test]
+    fn aleph_batch_places_account_output_before_funding_and_other_script_outputs() {
+        let mut blueprint = super::TxBlueprint::new();
+        let account_ref = OutputRef::new(TransactionHash::from([0x10; 32]), 0);
+        let funding_ref = OutputRef::new(TransactionHash::from([0x20; 32]), 0);
+        let pool_ref = OutputRef::new(TransactionHash::from([0x31; 32]), 0);
+
+        blueprint.add_script_ref_with_cost_for_test(pool_ref, false, ExUnits { mem: 0, steps: 0 });
+        blueprint.add_script_ref_with_cost_for_test(account_ref, true, ExUnits { mem: 0, steps: 0 });
+
+        let witness_script = cml_chain::plutus::PlutusV2Script::new(vec![0x42]);
+        let witness = DeployedValidatorErased {
+            reference_utxo: cml_chain::builders::tx_builder::TransactionUnspentOutput::new(
+                OutputRef::new(TransactionHash::from([0xf0; 32]), 0).into(),
+                TransactionOutput::new(
+                    super::test_output().address().clone(),
+                    Value::from(2_000_000),
+                    None,
+                    Some(cml_chain::Script::new_plutus_v2(witness_script.clone())),
+                ),
+            ),
+            hash: witness_script.hash(),
+            ex_budget: ExUnits { mem: 0, steps: 0 },
+            marginal_cost: ExUnits { mem: 0, steps: 0 },
+        };
+        blueprint.add_aleph_batch_intention(
+            witness,
+            account_ref,
+            crate::orders::green::AlephAuthorizedIntention {
+                intent: crate::orders::green::AlephIntention {
+                    abi: crate::orders::green::AlephAccountAbi::Current,
+                    target_nonce_index: 0,
+                    target_nonce_value: 1,
+                    leaving_asset: spectrum_cardano_lib::AssetClass::Native,
+                    leaving_amount: 0,
+                    arriving_asset: spectrum_cardano_lib::AssetClass::Native,
+                    expected_arriving_amount: 0,
+                    fee_lovelace: 0,
+                    operator: [0; 28],
+                },
+                remainder: 0,
+                auth: crate::orders::green::GreenAuth::new_sig(vec![], vec![], vec![0; 64], vec![]).unwrap(),
+            },
+        );
+
+        let operator_funding = FinalizedTxOut(super::key_payment_output(3_000_000), funding_ref);
+        let operator_address = OperatorRewardAddress(super::key_payment_output(3_000_000).address().clone());
+        let (tx_builder, funding_io) = blueprint.project_onto_builder(
+            constant_tx_builder(),
+            spectrum_cardano_lib::NetworkId::PREPROD,
+            operator_address,
+            operator_funding,
+            0,
+        );
+
+        assert!(matches!(funding_io, FundingIO::Replaced(_, _)));
+
+        let inputs = tx_builder.get_inputs();
+        assert_eq!(3, inputs.len());
+        assert_eq!(account_ref, inputs[0].input.clone().into());
+        assert_eq!(funding_ref, inputs[1].input.clone().into());
+        assert_eq!(pool_ref, inputs[2].input.clone().into());
+
+        let draft_body = tx_builder
+            .build_for_evaluation(
+                cml_chain::builders::tx_builder::ChangeSelectionAlgo::Default,
+                super::key_payment_output(3_000_000).address(),
+            )
+            .unwrap()
+            .draft_body();
+        let body_inputs = draft_body
+            .inputs
+            .iter()
+            .map(|input| OutputRef::new(input.transaction_id, input.index))
+            .collect::<Vec<_>>();
+        assert_eq!(vec![account_ref, funding_ref, pool_ref], body_inputs);
+
+        let outputs = tx_builder.get_outputs();
+
+        assert_eq!(3, outputs.len());
+        assert_eq!(
+            super::key_payment_output(3_000_000).address(),
+            outputs[1].address()
+        );
+        assert_ne!(
+            super::key_payment_output(3_000_000).address(),
+            outputs[0].address()
+        );
+        assert_ne!(
+            super::key_payment_output(3_000_000).address(),
+            outputs[2].address()
+        );
+    }
+
+    #[test]
+    fn aleph_batch_keeps_large_operator_reward_separate_from_funding_barrier() {
+        let mut blueprint = super::TxBlueprint::new();
+        let account_ref = OutputRef::new(TransactionHash::from([0x10; 32]), 0);
+        let funding_ref = OutputRef::new(TransactionHash::from([0x20; 32]), 0);
+        let pool_ref = OutputRef::new(TransactionHash::from([0x31; 32]), 0);
+
+        blueprint.add_script_ref_with_cost_for_test(pool_ref, false, ExUnits { mem: 0, steps: 0 });
+        blueprint.add_script_ref_with_cost_for_test(account_ref, true, ExUnits { mem: 0, steps: 0 });
+
+        let witness_script = cml_chain::plutus::PlutusV2Script::new(vec![0x42]);
+        let witness = DeployedValidatorErased {
+            reference_utxo: cml_chain::builders::tx_builder::TransactionUnspentOutput::new(
+                OutputRef::new(TransactionHash::from([0xf0; 32]), 0).into(),
+                TransactionOutput::new(
+                    super::test_output().address().clone(),
+                    Value::from(2_000_000),
+                    None,
+                    Some(cml_chain::Script::new_plutus_v2(witness_script.clone())),
+                ),
+            ),
+            hash: witness_script.hash(),
+            ex_budget: ExUnits { mem: 0, steps: 0 },
+            marginal_cost: ExUnits { mem: 0, steps: 0 },
+        };
+        blueprint.add_aleph_batch_intention(
+            witness,
+            account_ref,
+            crate::orders::green::AlephAuthorizedIntention {
+                intent: crate::orders::green::AlephIntention {
+                    abi: crate::orders::green::AlephAccountAbi::Current,
+                    target_nonce_index: 0,
+                    target_nonce_value: 1,
+                    leaving_asset: spectrum_cardano_lib::AssetClass::Native,
+                    leaving_amount: 0,
+                    arriving_asset: spectrum_cardano_lib::AssetClass::Native,
+                    expected_arriving_amount: 0,
+                    fee_lovelace: 0,
+                    operator: [0; 28],
+                },
+                remainder: 0,
+                auth: crate::orders::green::GreenAuth::new_sig(vec![], vec![], vec![0; 64], vec![]).unwrap(),
+            },
+        );
+
+        let funding_output = super::key_payment_output(3_000_000);
+        let reward_output = super::test_output();
+        let operator_funding = FinalizedTxOut(funding_output.clone(), funding_ref);
+        let operator_address = OperatorRewardAddress(reward_output.address().clone());
+        let (tx_builder, funding_io) = blueprint.project_onto_builder(
+            constant_tx_builder(),
+            spectrum_cardano_lib::NetworkId::PREPROD,
+            operator_address,
+            operator_funding,
+            2_000_000,
+        );
+
+        let FundingIO::Replaced(_, funding_barrier_output) = funding_io else {
+            panic!("expected funding replacement");
+        };
+        assert_eq!(funding_output.value(), funding_barrier_output.value());
+
+        let outputs = tx_builder.get_outputs();
+        assert_eq!(4, outputs.len());
+        assert_eq!(funding_output.address(), outputs[1].address());
+        assert_eq!(funding_output.value(), outputs[1].value());
+        assert_eq!(reward_output.address(), outputs[3].address());
+        assert_eq!(&Value::from(2_000_000), outputs[3].value());
+    }
+
+    #[test]
+    fn aleph_batch_adds_operator_to_extra_signatories() {
+        let mut blueprint = super::TxBlueprint::new();
+        let account_ref = OutputRef::new(TransactionHash::from([0x10; 32]), 0);
+        let funding_ref = OutputRef::new(TransactionHash::from([0x20; 32]), 0);
+        let operator = cml_crypto::Ed25519KeyHash::from([0xaa; 28]);
+
+        blueprint.add_script_ref_with_cost_for_test(account_ref, true, ExUnits { mem: 0, steps: 0 });
+
+        let witness_script = cml_chain::plutus::PlutusV2Script::new(vec![0x42]);
+        let witness = DeployedValidatorErased {
+            reference_utxo: cml_chain::builders::tx_builder::TransactionUnspentOutput::new(
+                OutputRef::new(TransactionHash::from([0xf0; 32]), 0).into(),
+                TransactionOutput::new(
+                    super::test_output().address().clone(),
+                    Value::from(2_000_000),
+                    None,
+                    Some(cml_chain::Script::new_plutus_v2(witness_script.clone())),
+                ),
+            ),
+            hash: witness_script.hash(),
+            ex_budget: ExUnits { mem: 0, steps: 0 },
+            marginal_cost: ExUnits { mem: 0, steps: 0 },
+        };
+        blueprint.add_aleph_batch_intention(
+            witness,
+            account_ref,
+            crate::orders::green::AlephAuthorizedIntention {
+                intent: crate::orders::green::AlephIntention {
+                    abi: crate::orders::green::AlephAccountAbi::Current,
+                    target_nonce_index: 0,
+                    target_nonce_value: 1,
+                    leaving_asset: spectrum_cardano_lib::AssetClass::Native,
+                    leaving_amount: 0,
+                    arriving_asset: spectrum_cardano_lib::AssetClass::Native,
+                    expected_arriving_amount: 0,
+                    fee_lovelace: 0,
+                    operator: [0xaa; 28],
+                },
+                remainder: 0,
+                auth: crate::orders::green::GreenAuth::new_sig(vec![], vec![], vec![0; 64], vec![]).unwrap(),
+            },
+        );
+
+        let (tx_builder, _) = blueprint.project_onto_builder(
+            constant_tx_builder(),
+            spectrum_cardano_lib::NetworkId::PREPROD,
+            OperatorRewardAddress(super::test_output().address().clone()),
+            FinalizedTxOut(super::key_payment_output(3_000_000), funding_ref),
+            0,
+        );
+        let draft_body = tx_builder
+            .build_for_evaluation(
+                cml_chain::builders::tx_builder::ChangeSelectionAlgo::Default,
+                super::key_payment_output(3_000_000).address(),
+            )
+            .unwrap()
+            .draft_body();
+
+        assert_eq!(
+            Some(vec![operator]),
+            draft_body.required_signers.map(|signers| signers.into_iter().collect())
+        );
     }
 
     const SCRIPT: &str = "59041459041101000033232323232323232322222323253330093232533300b003132323300100100222533301100114a02646464a66602266ebc0380045288998028028011808801180a80118098009bab301030113011301130113011301130090011323232533300e3370e900118068008991919299980899b8748000c0400044c8c8c8c8c94ccc0594ccc05802c400852808008a503375e601860260046034603660366036603660366036603660366036602602266ebcc020c048c020c048008c020c048004c060dd6180c180c980c9808804980b80098078008b19191980080080111299980b0008a60103d87a80001323253330153375e6018602600400c266e952000330190024bd70099802002000980d001180c0009bac3007300e0063014001300c001163001300b0072301230130013322323300100100322533301200114a026464a66602266e3c008014528899802002000980b0011bae3014001375860206022602260226022602260226022602260120026eb8c040c044c044c044c044c044c044c044c044c044c044c02401cc004c0200108c03c004526136563370e900118049baa003323232533300a3370e90000008991919191919191919191919191919191919191919191919299981298140010991919191924c646600200200c44a6660560022930991980180198178011bae302d0013253330263370e9000000899191919299981698180010991924c64a66605866e1d20000011323253330313034002132498c94ccc0bccdc3a400000226464a666068606e0042649318150008b181a80098168010a99981799b87480080044c8c8c8c8c8c94ccc0e0c0ec00852616375a607200260720046eb4c0dc004c0dc008dd6981a80098168010b18168008b181900098150018a99981619b874800800454ccc0bcc0a800c5261616302a002302300316302e001302e002302c00130240091630240083253330253370e9000000899191919299981618178010a4c2c6eb4c0b4004c0b4008dd6981580098118060b1811805980d806180d0098b1bac30260013026002375c60480026048004604400260440046eb4c080004c080008c078004c078008c070004c070008dd6980d000980d0011bad30180013018002375a602c002602c004602800260280046eb8c048004c048008dd7180800098040030b1804002919299980519b87480000044c8c8c8c94ccc044c05000852616375c602400260240046eb8c040004c02000858c0200048c94ccc024cdc3a400000226464a66601c60220042930b1bae300f0013007002153330093370e900100089919299980718088010a4c2c6eb8c03c004c01c00858c01c0048c014dd5000918019baa0015734aae7555cf2ab9f5740ae855d126126d8799fd87a9f581ce7feddaece029040c973d5bf806fa9497314c0a63dfdc47fc47ac557ffff0001";

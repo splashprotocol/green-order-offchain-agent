@@ -46,10 +46,16 @@ pub struct AppConfig {
     pub health_listen_addr: Option<SocketAddr>,
     #[serde(default)]
     pub green_orders: GreenOrdersConfig,
+    #[serde(default = "default_min_operator_funding_lovelace")]
+    pub min_operator_funding_lovelace: u64,
 }
 
 fn default_disable_mempool() -> bool {
     false
+}
+
+fn default_min_operator_funding_lovelace() -> u64 {
+    10_000_000
 }
 
 impl CheckIntegrity for AppConfig {

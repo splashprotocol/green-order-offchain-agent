@@ -46,6 +46,14 @@ use crate::orders::grid::GridOrder;
 use crate::orders::limit::LimitOrder;
 use crate::orders::{grid, instant, limit, AnyOrder};
 use crate::pools::classified::ClassifiedPool;
+
+fn aleph_delegate_index_for_witness(allowlist: &[[u8; 28]], witness_hash: [u8; 28]) -> u64 {
+    allowlist
+        .iter()
+        .position(|hash| *hash == witness_hash)
+        .map(|index| index as u64)
+        .expect("Aleph batch witness script is not present in account allowlist")
+}
 use crate::pools::royalty_v1::RoyaltyV1PoolOnly;
 
 /// Magnet for local instances.
@@ -574,14 +582,14 @@ where
             .erased();
         let witness_hash =
             <[u8; 28]>::try_from(batch_witness.hash.to_raw_bytes()).expect("script hash must be 28 bytes");
-        let delegate_ix = account
-            .state
-            .allowlist
-            .iter()
-            .position(|hash| *hash == witness_hash)
-            .expect("Aleph batch witness script is not present in account allowlist");
+        let delegate_index = if account.state.abi == crate::orders::green::AlephAccountAbi::Current {
+            aleph_delegate_index_for_witness(&account.state.allowlist, witness_hash)
+        } else {
+            0
+        };
 
-        let aleph_intention = ord.aleph_intention();
+        let mut aleph_intention = ord.aleph_intention();
+        aleph_intention.abi = account.state.abi.clone();
         let intent_key = aleph_intention.intent_key();
         let intent_digest = aleph_intention.digest();
         let mut authorized_auth = ord.auth.clone();
@@ -655,6 +663,11 @@ where
             .expect("Aleph account output must carry inline account datum");
         *datum = next_state.into_pd();
 
+        let account_action = match account.state.abi {
+            crate::orders::green::AlephAccountAbi::Legacy => AlephAccountAction::Direct,
+            crate::orders::green::AlephAccountAbi::Current => AlephAccountAction::Delegate(delegate_index),
+        };
+
         let input = ScriptInputBlueprint {
             reference: account.output_ref,
             utxo: account.output.clone(),
@@ -664,12 +677,12 @@ where
                     account_validator.ex_budget + account_validator.marginal_cost.scale(ctx.self_index as u64)
                 }),
             },
-            redeemer: ready_redeemer(AlephAccountAction::Delegate(delegate_ix as u64).into_pd()),
+            redeemer: ready_redeemer(account_action.into_pd()),
             required_signers: vec![operator].into(),
         };
 
         let authorized = AlephAuthorizedIntention {
-            intent: ord.aleph_intention(),
+            intent: aleph_intention,
             remainder: leaving_remainder,
             auth: authorized_auth,
         };
@@ -1011,6 +1024,25 @@ where
         state.tx_blueprint.add_io(input, produced_out);
         state.tx_blueprint.add_ref_input(reference_utxo);
         (state, effect, context)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::aleph_delegate_index_for_witness;
+
+    #[test]
+    fn aleph_delegate_index_uses_batch_witness_allowlist_position() {
+        let witness_hash = [6; 28];
+        let allowlist = [[4; 28], [5; 28], witness_hash, [7; 28]];
+
+        assert_eq!(2, aleph_delegate_index_for_witness(&allowlist, witness_hash));
+    }
+
+    #[test]
+    #[should_panic(expected = "Aleph batch witness script is not present in account allowlist")]
+    fn aleph_delegate_index_rejects_missing_batch_witness_hash() {
+        aleph_delegate_index_for_witness(&[[4; 28], [5; 28]], [6; 28]);
     }
 }
 

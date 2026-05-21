@@ -115,7 +115,7 @@ where
 #[cfg(test)]
 mod tests {
     use bloom_offchain_cardano::event_sink::tx_view::TxViewMut;
-    use bloom_offchain_cardano::orders::green::AlephAccountState;
+    use bloom_offchain_cardano::orders::green::{AlephAccountAbi, AlephAccountState};
     use cml_chain::address::{Address, EnterpriseAddress};
     use cml_chain::assets::AssetBundle;
     use cml_chain::certs::Credential;
@@ -146,6 +146,7 @@ mod tests {
 
     fn account_state() -> AlephAccountState {
         AlephAccountState {
+            abi: AlephAccountAbi::Current,
             magic: b"green-test".to_vec(),
             allowlist: vec![],
             nonce: vec![0],

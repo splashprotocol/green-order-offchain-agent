@@ -15,6 +15,7 @@ use spectrum_offchain::network::Network;
 use spectrum_offchain::tx_hash::CanonicalHash;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -113,6 +114,7 @@ where
                     agent.tracker.track(tx_hash, tx).await;
                 },
                 Ok(Response::Rejected(errors)) => {
+                    dump_rejected_tx_if_enabled(&tx_hash, &tx);
                     trace!("TX {} was rejected due to error: {:?}", tx_hash, errors);
                     on_resp.send(SubmissionResult::TxRejected{errors: TxRejection(errors)}).expect("Responder was dropped");
                 },
@@ -122,6 +124,25 @@ where
                 Err(err) => panic!("Cannot submit TX {} due to {}", tx_hash, err),
             }
         }
+    }
+}
+
+fn dump_rejected_tx_if_enabled<Tx, TxHash>(tx_hash: &TxHash, tx: &Tx)
+where
+    Tx: Serialize,
+    TxHash: Display,
+{
+    let Ok(dir) = std::env::var("GREEN_ORDER_DUMP_REJECTED_TX_DIR") else {
+        return;
+    };
+    let mut path = PathBuf::from(dir);
+    if let Err(err) = std::fs::create_dir_all(&path) {
+        trace!("Cannot create rejected tx dump dir {}: {}", path.display(), err);
+        return;
+    }
+    path.push(format!("{}.cbor", tx_hash));
+    if let Err(err) = std::fs::write(&path, tx.to_cbor_bytes()) {
+        trace!("Cannot write rejected tx dump {}: {}", path.display(), err);
     }
 }
 

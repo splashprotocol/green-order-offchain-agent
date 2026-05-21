@@ -57,3 +57,42 @@ source still exists for local testing, but is disabled by default.
 
 `inputAsset` and `outputAsset` use the repository's `AssetClass` wire encoding:
 `00` for ADA, or `policy_id || asset_name` as hex for a native token.
+
+### Binding a Preprod Green Account
+
+The green order agent must bind an externally known `accountId` to one observed
+Aleph account UTxO before it can accept intents for that account. Start the
+agent and wait until chain sync reaches the block containing the Aleph account
+output, then call the loopback-only admin endpoint:
+
+```bash
+curl -sS -X POST http://127.0.0.1:9031/accounts/bind \
+  -H 'content-type: application/json' \
+  -d '{
+    "accountId": "<32-byte hex account id>",
+    "txHash": "<32-byte transaction hash>",
+    "outputIndex": 0
+  }'
+```
+
+Expected success:
+
+```json
+{"status":"bound","reason":null}
+```
+
+The endpoint is one-time per `accountId`. After it succeeds, the agent tracks
+future account UTxOs from ledger and mempool events when they match planned MPF
+store-root transitions made by the execution flow. Calling it again for the same
+`accountId` returns `alreadyBound`.
+
+After a restart, the persisted binding is restored lazily: `current(accountId)`
+becomes available only after chain sync observes the persisted account output
+again.
+
+## Preprod E2E scripts
+
+Preprod setup and smoke scripts live under
+`green-order-cardano-agent/e2e/preprod`. See
+`green-order-cardano-agent/e2e/preprod/README.md` for required environment
+variables and run order.

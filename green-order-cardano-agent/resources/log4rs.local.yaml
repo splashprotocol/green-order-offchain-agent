@@ -1,0 +1,37 @@
+refresh_rate: 30 seconds
+appenders:
+  stdout:
+    kind: console
+    encoder:
+      pattern: "{d(%Y-%m-%d %H:%M:%S)} {h({l}):5.5} {({T}):4.10} - {m}{n}"
+root:
+  level: info
+  appenders:
+    - stdout
+
+loggers:
+  agent_main:
+    level: info
+    appenders:
+      - stdout
+    additive: false
+  green_order_cardano_agent:
+    level: info
+    appenders:
+      - stdout
+    additive: false
+  bloom_offchain:
+    level: info
+    appenders:
+      - stdout
+    additive: false
+  bloom_offchain_cardano:
+    level: info
+    appenders:
+      - stdout
+    additive: false
+  spectrum_offchain_cardano:
+    level: info
+    appenders:
+      - stdout
+    additive: false

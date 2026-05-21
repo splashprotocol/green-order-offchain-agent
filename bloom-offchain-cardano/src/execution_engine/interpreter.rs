@@ -167,6 +167,24 @@ where
         let tx_body = tx.body_ref();
         let tx_hash = hash_transaction_canonical(tx_body);
         let tx_outputs = &tx_body.outputs;
+        info!(
+            "Built execution tx {} inputs=[{}] outputs={} withdrawals={} signatories=[{}]",
+            tx_hash,
+            tx_body
+                .inputs
+                .iter()
+                .enumerate()
+                .map(|(ix, input)| format!("{}:{}#{}", ix, input.transaction_id.to_hex(), input.index))
+                .collect::<Vec<_>>()
+                .join(","),
+            tx_outputs.len(),
+            tx_body.withdrawals.as_ref().map(|withdrawals| withdrawals.len()).unwrap_or(0),
+            tx_body
+                .required_signers
+                .as_ref()
+                .map(|signers| signers.iter().map(|signer| signer.to_hex()).collect::<Vec<_>>().join(","))
+                .unwrap_or_default(),
+        );
 
         // Map finalized outputs to states of corresponding domain entities.
         let mut finalized_effects = vec![];

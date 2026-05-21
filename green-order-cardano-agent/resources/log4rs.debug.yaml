@@ -1,0 +1,27 @@
+refresh_rate: 30 seconds
+appenders:
+  stdout:
+    kind: console
+    encoder:
+      pattern: "{d(%Y-%m-%d %H:%M:%S)} {h({l}):5.5} {({T}):4.10} - {m}{n}"
+  file:
+    kind: file
+    path: "green-order-cardano-agent/e2e/preprod/.state/agent-debug.log"
+    append: false
+    encoder:
+      pattern: "{d(%Y-%m-%d %H:%M:%S)} {l:5.5} {T:4.10} - {m}{n}"
+root:
+  level: info
+  appenders:
+    - stdout
+    - file
+
+loggers:
+  green_order_cardano_agent:
+    level: info
+  bloom_offchain:
+    level: info
+  bloom_offchain_cardano:
+    level: info
+  spectrum_offchain_cardano:
+    level: info

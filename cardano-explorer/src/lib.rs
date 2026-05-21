@@ -8,17 +8,19 @@ use blockfrost_openapi::models::{
 };
 use cml_chain::address::Address;
 use cml_chain::builders::tx_builder::TransactionUnspentOutput;
-use cml_chain::plutus::{PlutusData, PlutusV2Script};
+use cml_chain::plutus::{PlutusData, PlutusV1Script, PlutusV2Script, PlutusV3Script};
 use cml_chain::transaction::{DatumOption, TransactionInput, TransactionOutput};
 use cml_chain::{Script, Value};
 use cml_core::serialization::Deserialize;
 use cml_crypto::{DatumHash, TransactionHash};
 use futures::future::join_all;
-use log::trace;
+use log::{trace, warn};
 use maestro_rust_sdk::client::maestro;
 use maestro_rust_sdk::models::addresses::UtxosAtAddress;
 use maestro_rust_sdk::models::transactions::RedeemerEvaluation;
 use maestro_rust_sdk::utils::Parameters;
+use serde::Deserialize as SerdeDeserialize;
+use serde_json::json;
 use spectrum_cardano_lib::value::ValueExtension;
 use spectrum_cardano_lib::AssetClass::{Native, Token};
 use spectrum_cardano_lib::Token as RawToken;
@@ -449,9 +451,192 @@ pub struct UTxOInfo {
     pub metadata_json: serde_json::Value,
 }
 
+pub struct Koios {
+    client: reqwest::Client,
+    base_url: String,
+}
+
+#[derive(SerdeDeserialize)]
+struct KoiosUtxo {
+    tx_hash: String,
+    tx_index: u64,
+    address: String,
+    value: String,
+    #[serde(default)]
+    datum_hash: Option<String>,
+    #[serde(default)]
+    inline_datum: Option<KoiosBytes>,
+    #[serde(default)]
+    reference_script: Option<KoiosReferenceScript>,
+    #[serde(default)]
+    asset_list: Vec<KoiosAsset>,
+}
+
+#[derive(SerdeDeserialize)]
+struct KoiosBytes {
+    bytes: String,
+}
+
+#[derive(SerdeDeserialize)]
+struct KoiosReferenceScript {
+    #[serde(rename = "type")]
+    script_type: String,
+    bytes: String,
+}
+
+#[derive(SerdeDeserialize)]
+struct KoiosAsset {
+    policy_id: String,
+    asset_name: String,
+    quantity: String,
+}
+
+impl Koios {
+    pub fn new(base_url: String) -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("Koios HTTP client configuration must be valid"),
+            base_url: base_url.trim_end_matches('/').to_string(),
+        }
+    }
+
+    pub fn parse_utxo_json(row: serde_json::Value) -> Option<TransactionUnspentOutput> {
+        Self::parse_output(serde_json::from_value(row).ok()?)
+    }
+
+    async fn post_utxos(&self, endpoint: &str, body: serde_json::Value) -> Vec<TransactionUnspentOutput> {
+        let response = match self
+            .client
+            .post(format!("{}/{}", self.base_url, endpoint.trim_start_matches('/')))
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(response) => match response.json::<Vec<KoiosUtxo>>().await {
+                Ok(rows) => Some(rows),
+                Err(error) => {
+                    warn!("Koios {} response decode failed: {}", endpoint, error);
+                    None
+                }
+            },
+            Err(error) => {
+                warn!("Koios {} request failed: {}", endpoint, error);
+                None
+            }
+        };
+
+        response
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(Self::parse_output)
+            .collect()
+    }
+
+    fn parse_output(utxo: KoiosUtxo) -> Option<TransactionUnspentOutput> {
+        let mut value = Value::zero();
+        value.add_unsafe(Native, utxo.value.parse::<u64>().ok()?);
+
+        for asset in utxo.asset_list {
+            let raw_token = format!("{}.{}", asset.policy_id, asset.asset_name);
+            let token = RawToken::try_from_raw_string(raw_token.as_str())?;
+            value.add_unsafe(Token(token), asset.quantity.parse::<u64>().ok()?);
+        }
+
+        let datum = utxo
+            .inline_datum
+            .and_then(|datum| {
+                let bytes = hex::decode(datum.bytes).ok()?;
+                PlutusData::from_cbor_bytes(bytes.as_slice())
+                    .ok()
+                    .map(DatumOption::new_datum)
+            })
+            .or_else(|| {
+                utxo.datum_hash.and_then(|datum_hash| {
+                    DatumHash::from_hex(datum_hash.as_str())
+                        .ok()
+                        .map(DatumOption::new_hash)
+                })
+            });
+
+        let script = utxo.reference_script.and_then(|script| {
+            let bytes = hex::decode(script.bytes).ok()?;
+            match script.script_type.as_str() {
+                "plutusV1" => Some(Script::new_plutus_v1(PlutusV1Script::new(bytes))),
+                "plutusV2" => Some(Script::new_plutus_v2(PlutusV2Script::new(bytes))),
+                "plutusV3" => Some(Script::new_plutus_v3(PlutusV3Script::new(bytes))),
+                _ => None,
+            }
+        });
+
+        Some(TransactionUnspentOutput {
+            input: TransactionInput::new(
+                TransactionHash::from_hex(utxo.tx_hash.as_str()).ok()?,
+                utxo.tx_index,
+            ),
+            output: TransactionOutput::new(
+                Address::from_bech32(utxo.address.as_str()).ok()?,
+                value,
+                datum,
+                script,
+            ),
+        })
+    }
+}
+
+#[async_trait]
+impl CardanoNetwork for Koios {
+    async fn utxo_by_ref(&self, oref: OutputRef) -> Option<TransactionUnspentOutput> {
+        let body = json!({
+            "_utxo_refs": [format!("{}#{}", oref.tx_hash().to_hex(), oref.index())],
+            "_extended": true
+        });
+        for attempt in 0..5 {
+            let found = self.post_utxos("utxo_info", body.clone()).await.into_iter().next();
+            if found.is_some() {
+                return found;
+            }
+            warn!("Koios utxo_info did not return {}; retry {}/5", oref, attempt + 1);
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+        None
+    }
+
+    async fn utxos_by_pay_cred(
+        &self,
+        _payment_credential: PaymentCredential,
+        _offset: u32,
+        _limit: u16,
+    ) -> Vec<TransactionUnspentOutput> {
+        vec![]
+    }
+
+    async fn utxos_by_address(
+        &self,
+        address: Address,
+        offset: u32,
+        limit: u16,
+    ) -> Vec<TransactionUnspentOutput> {
+        self.post_utxos(
+            "address_utxos",
+            json!({
+                "_addresses": [address.to_bech32(None).unwrap()],
+                "_extended": true
+            }),
+        )
+        .await
+        .into_iter()
+        .skip(offset as usize)
+        .take(limit as usize)
+        .collect()
+    }
+}
+
 pub enum AnyExplorer {
     Blockfrost(Blockfrost),
     Maestro(Maestro),
+    Koios(Koios),
 }
 
 impl AnyExplorer {
@@ -465,6 +650,9 @@ impl AnyExplorer {
             ExplorerConfig::BlockfrostKeyPath(blockfrost_key_path) => Blockfrost::new(blockfrost_key_path)
                 .await
                 .map(AnyExplorer::Blockfrost),
+            ExplorerConfig::KoiosBaseUrl(koios_base_url) => {
+                Ok(AnyExplorer::Koios(Koios::new(koios_base_url.clone())))
+            }
         }
     }
 }
@@ -475,6 +663,7 @@ impl CardanoNetwork for AnyExplorer {
         match self {
             AnyExplorer::Blockfrost(blockfrost) => blockfrost.utxo_by_ref(oref).await,
             AnyExplorer::Maestro(maestro) => maestro.utxo_by_ref(oref).await,
+            AnyExplorer::Koios(koios) => koios.utxo_by_ref(oref).await,
         }
     }
 
@@ -493,6 +682,7 @@ impl CardanoNetwork for AnyExplorer {
             AnyExplorer::Maestro(maestro) => {
                 maestro.utxos_by_pay_cred(payment_credential, offset, limit).await
             }
+            AnyExplorer::Koios(koios) => koios.utxos_by_pay_cred(payment_credential, offset, limit).await,
         }
     }
 
@@ -505,6 +695,7 @@ impl CardanoNetwork for AnyExplorer {
         match self {
             AnyExplorer::Blockfrost(blockfrost) => blockfrost.utxos_by_address(address, offset, limit).await,
             AnyExplorer::Maestro(maestro) => maestro.utxos_by_address(address, offset, limit).await,
+            AnyExplorer::Koios(koios) => koios.utxos_by_address(address, offset, limit).await,
         }
     }
 }

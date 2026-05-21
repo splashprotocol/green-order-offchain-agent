@@ -311,7 +311,9 @@ impl<'de> Deserialize<'de> for GreenOrdersConfig {
 
 #[cfg(test)]
 mod tests {
-    use bloom_offchain_cardano::orders::green::{AlephAccountState, ALEPH_ACCOUNT_VALIDATOR};
+    use bloom_offchain_cardano::orders::green::{
+        AlephAccountAbi, AlephAccountState, ALEPH_ACCOUNT_VALIDATOR,
+    };
     use cml_chain::address::{Address, EnterpriseAddress};
     use cml_chain::assets::AssetBundle;
     use cml_chain::certs::Credential;
@@ -353,6 +355,7 @@ mod tests {
 
     fn account_state(nonce: i64) -> AlephAccountState {
         AlephAccountState {
+            abi: AlephAccountAbi::Current,
             magic: b"green-test".to_vec(),
             allowlist: vec![],
             nonce: vec![nonce],

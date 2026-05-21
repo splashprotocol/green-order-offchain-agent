@@ -3,4 +3,5 @@
 pub enum ExplorerConfig {
     MaestroKeyPath(String),
     BlockfrostKeyPath(String),
+    KoiosBaseUrl(String),
 }

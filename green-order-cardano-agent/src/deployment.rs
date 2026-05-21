@@ -1,9 +1,11 @@
 use bloom_offchain_cardano::orders::green::{ALEPH_ACCOUNT_VALIDATOR, ALEPH_BATCH_WITNESS_VALIDATOR};
 use cardano_explorer::CardanoNetwork;
+use spectrum_cardano_lib::ex_units::ExUnits;
 use spectrum_offchain::domain::Has;
+use cml_chain::builders::tx_builder::TransactionUnspentOutput;
 use spectrum_offchain_cardano::deployment::{
     DeployedScriptInfo, DeployedValidator, DeployedValidatorRef, DeployedValidators, ProtocolDeployment,
-    ProtocolScriptHashes,
+    ProtocolScriptHashes, ProtocolValidator,
 };
 use type_equalities::IsEqual;
 
@@ -35,12 +37,103 @@ impl GreenProtocolDeployment {
         validators: GreenDeployedValidators,
         explorer: &Net,
     ) -> Self {
+        let spectrum_refs = validators.spectrum;
+        let royalty_pool_ledger_fixed =
+            DeployedValidator::unsafe_pull(spectrum_refs.royalty_pool_ledger_fixed.clone(), explorer).await;
+        let script_anchor = royalty_pool_ledger_fixed.reference_utxo.clone();
         Self {
-            spectrum: ProtocolDeployment::unsafe_pull(validators.spectrum, explorer).await,
+            spectrum: green_protocol_deployment_from_refs(
+                spectrum_refs,
+                royalty_pool_ledger_fixed,
+                script_anchor,
+            ),
             aleph_account: DeployedValidator::unsafe_pull(validators.aleph_account, explorer).await,
             aleph_batch_witness: DeployedValidator::unsafe_pull(validators.aleph_batch_witness, explorer)
                 .await,
         }
+    }
+}
+
+fn green_protocol_deployment_from_refs(
+    refs: DeployedValidators,
+    royalty_pool_ledger_fixed: DeployedValidator<{ ProtocolValidator::RoyaltyPoolV1LedgerFixed as u8 }>,
+    script_anchor: TransactionUnspentOutput,
+) -> ProtocolDeployment {
+    ProtocolDeployment {
+        limit_order_witness: materialize_ref(refs.limit_order_witness, &script_anchor),
+        limit_order: materialize_ref(refs.limit_order, &script_anchor),
+        instant_order_witness: materialize_ref(refs.instant_order_witness, &script_anchor),
+        instant_order: materialize_ref(refs.instant_order, &script_anchor),
+        grid_order_native: materialize_ref(refs.grid_order_native, &script_anchor),
+        const_fn_pool_v1: materialize_ref(refs.const_fn_pool_v1, &script_anchor),
+        const_fn_pool_v2: materialize_ref(refs.const_fn_pool_v2, &script_anchor),
+        const_fn_pool_fee_switch: materialize_ref(refs.const_fn_pool_fee_switch, &script_anchor),
+        const_fn_pool_fee_switch_v2: materialize_ref(refs.const_fn_pool_fee_switch_v2, &script_anchor),
+        const_fn_pool_fee_switch_bidir_fee: materialize_ref(
+            refs.const_fn_pool_fee_switch_bidir_fee,
+            &script_anchor,
+        ),
+        const_fn_pool_swap: materialize_ref(refs.const_fn_pool_swap, &script_anchor),
+        const_fn_pool_deposit: materialize_ref(refs.const_fn_pool_deposit, &script_anchor),
+        const_fn_pool_redeem: materialize_ref(refs.const_fn_pool_redeem, &script_anchor),
+        const_fn_fee_switch_pool_swap: materialize_ref(refs.const_fn_fee_switch_pool_swap, &script_anchor),
+        const_fn_fee_switch_pool_deposit: materialize_ref(
+            refs.const_fn_fee_switch_pool_deposit,
+            &script_anchor,
+        ),
+        const_fn_fee_switch_pool_redeem: materialize_ref(
+            refs.const_fn_fee_switch_pool_redeem,
+            &script_anchor,
+        ),
+        balance_fn_pool_v1: materialize_ref(refs.balance_fn_pool_v1, &script_anchor),
+        balance_fn_pool_v2: materialize_ref(refs.balance_fn_pool_v2, &script_anchor),
+        balance_fn_pool_deposit: materialize_ref(refs.balance_fn_pool_deposit, &script_anchor),
+        balance_fn_pool_redeem: materialize_ref(refs.balance_fn_pool_redeem, &script_anchor),
+        stable_fn_pool_t2t: materialize_ref(refs.stable_fn_pool_t2t, &script_anchor),
+        stable_fn_pool_t2t_deposit: materialize_ref(refs.stable_fn_pool_t2t_deposit, &script_anchor),
+        stable_fn_pool_t2t_redeem: materialize_ref(refs.stable_fn_pool_t2t_redeem, &script_anchor),
+        royalty_pool: materialize_ref(refs.royalty_pool, &script_anchor),
+        royalty_pool_ledger_fixed,
+        royalty_pool_v2: materialize_ref(refs.royalty_pool_v2, &script_anchor),
+        royalty_pool_deposit: materialize_ref(refs.royalty_pool_deposit, &script_anchor),
+        royalty_pool_deposit_v2: materialize_ref(refs.royalty_pool_deposit_v2, &script_anchor),
+        royalty_pool_redeem: materialize_ref(refs.royalty_pool_redeem, &script_anchor),
+        royalty_pool_redeem_v2: materialize_ref(refs.royalty_pool_redeem_v2, &script_anchor),
+        royalty_pool_royalty_withdraw_request: materialize_ref(
+            refs.royalty_pool_withdraw_request,
+            &script_anchor,
+        ),
+        royalty_pool_v2_royalty_withdraw_request: materialize_ref(
+            refs.royalty_pool_v2_withdraw_request,
+            &script_anchor,
+        ),
+        royalty_pool_dao_request: materialize_ref(refs.royalty_pool_dao_request, &script_anchor),
+        royalty_pool_v2_dao_request: materialize_ref(refs.royalty_pool_v2_dao_request, &script_anchor),
+        royalty_pool_dao: materialize_ref(refs.royalty_pool_dao_contract, &script_anchor),
+        royalty_pool_v2_dao: materialize_ref(refs.royalty_pool_dao_contract_v2, &script_anchor),
+        royalty_pool_withdraw: materialize_ref(refs.royalty_pool_withdraw_contract, &script_anchor),
+        royalty_pool_withdraw_ledger_fixed: materialize_ref(
+            refs.royalty_pool_withdraw_contract_ledger_fixed,
+            &script_anchor,
+        ),
+        royalty_pool_withdraw_v2: materialize_ref(
+            refs.royalty_pool_withdraw_contract_v2,
+            &script_anchor,
+        ),
+    }
+}
+
+fn materialize_ref<const TYP: u8>(
+    reference: DeployedValidatorRef,
+    script_anchor: &TransactionUnspentOutput,
+) -> DeployedValidator<TYP> {
+    DeployedValidator {
+        reference_utxo: script_anchor.clone(),
+        hash: reference.hash,
+        cost: reference.cost,
+        marginal_cost: reference
+            .marginal_cost
+            .unwrap_or(ExUnits { mem: 0, steps: 0 }),
     }
 }
 

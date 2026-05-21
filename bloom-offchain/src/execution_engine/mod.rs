@@ -143,7 +143,7 @@ where
     Funding: Stream<Item = FundingEvent<Bearer>> + Unpin + 'a,
     Pair: Copy + Clone + Eq + Ord + Hash + Display + Unpin + 'a,
     StableId: Copy + Clone + Eq + Hash + Debug + Display + Unpin + Send + Sync + 'a,
-    Ver: Copy + Clone + Eq + Hash + Display + Unpin + Send + Sync + Serialize + DeserializeOwned + 'a,
+    Ver: Copy + Clone + Eq + Ord + Hash + Display + Unpin + Send + Sync + Serialize + DeserializeOwned + 'a,
     Pool: Stable<StableId = StableId> + Clone + Debug + Unpin + Display + 'a,
     CompOrd: Stable<StableId = StableId> + MarketTaker<U = ExUnits> + Clone + Debug + Unpin + Display + 'a,
     SpecOrd: SpecializedOrder<TPoolId = StableId, TOrderId = Ver> + Debug + Unpin + 'a,
@@ -608,6 +608,7 @@ where
         L: HotBacklog<Bundled<SO, B>> + Maker<PR, MC>,
         E: TryInto<HashSet<V>> + Unpin + Debug + Display,
     {
+        let submission_err = format!("{}", err);
         if let Ok(missing_inputs) = err.try_into() {
             let strict_index_consistency = match pending_effects {
                 ExecutionEffects::FromLiquidityBook(_) => {
@@ -638,7 +639,7 @@ where
                 }
             }
         } else {
-            warn!("Unknown Tx submission error!");
+            warn!("Unknown Tx submission error: {}", submission_err);
             match pending_effects {
                 ExecutionEffects::FromLiquidityBook(effs) => {
                     let orders = effs
@@ -793,6 +794,37 @@ fn to_transition<T, B>(prev: Option<Bundled<T, B>>, next: Option<Bundled<T, B>>)
     }
 }
 
+fn pop_preferred_funding<Bearer, V>(
+    funding_pool: &mut BTreeSet<Bearer>,
+    consumed_versions: &HashSet<V>,
+) -> Option<Bearer>
+where
+    Bearer: Has<V> + Ord + Clone,
+    V: Ord + Copy,
+{
+    if consumed_versions.len() != 2 {
+        return funding_pool.pop_first();
+    }
+
+    let mut consumed = consumed_versions.iter().copied().collect::<Vec<_>>();
+    consumed.sort();
+    let lower = consumed[0];
+    let upper = consumed[1];
+    let gap_candidate = funding_pool
+        .iter()
+        .find(|funding| {
+            let funding_ref = funding.select::<V>();
+            lower < funding_ref && funding_ref < upper
+        })
+        .cloned();
+
+    if let Some(candidate) = gap_candidate {
+        funding_pool.take(&candidate)
+    } else {
+        funding_pool.pop_first()
+    }
+}
+
 impl<S, FN, PR, I, V, CO, SO, P, B, TC, TX, TH, U, C, MC, IX, TLB, L, RIR, SIR, PRV, M, E, LCX> Stream
     for Executor<S, FN, PR, I, V, CO, SO, P, B, TC, TX, TH, C, MC, IX, TLB, L, RIR, SIR, PRV, M, E, LCX>
 where
@@ -800,7 +832,7 @@ where
     FN: Stream<Item = FundingEvent<B>> + Unpin,
     PR: Copy + Clone + Eq + Ord + Hash + Display + Unpin,
     I: Copy + Clone + Eq + Hash + Debug + Display + Unpin + Send + Sync,
-    V: Copy + Clone + Eq + Hash + Display + Unpin + Send + Sync + Serialize + DeserializeOwned,
+    V: Copy + Clone + Eq + Ord + Hash + Display + Unpin + Send + Sync + Serialize + DeserializeOwned,
     P: Stable<StableId = I> + Clone + Debug + Unpin + Display,
     CO: Stable<StableId = I> + MarketTaker<U = U> + Clone + Debug + Unpin + Display,
     SO: SpecializedOrder<TPoolId = I, TOrderId = V> + Unpin,
@@ -885,7 +917,9 @@ where
                         Ok((linked_recipe, consumed_versions)) => {
                             report.with_executions(&linked_recipe);
                             let ctx = self.context.clone();
-                            if let Some(funding) = self.funding_pool.pop_first() {
+                            if let Some(funding) =
+                                pop_preferred_funding(&mut self.funding_pool, &consumed_versions)
+                            {
                                 trace!("Consumed bearers: {}", display_set(&consumed_versions));
                                 let ExecutionResult {
                                     txc,
@@ -984,7 +1018,7 @@ where
     FN: Stream<Item = FundingEvent<B>> + Unpin,
     PR: Copy + Clone + Eq + Ord + Hash + Display + Unpin,
     ST: Copy + Clone + Eq + Hash + Debug + Display + Unpin + Send + Sync,
-    V: Copy + Clone + Eq + Hash + Display + Unpin + Send + Sync + Serialize + DeserializeOwned,
+    V: Copy + Clone + Eq + Ord + Hash + Display + Unpin + Send + Sync + Serialize + DeserializeOwned,
     P: Stable<StableId = ST> + Clone + Debug + Unpin + Display,
     CO: Stable<StableId = ST> + MarketTaker<U = U> + Clone + Debug + Unpin + Display,
     SO: SpecializedOrder<TPoolId = ST, TOrderId = V> + Unpin,
@@ -1006,5 +1040,62 @@ where
 {
     fn is_terminated(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeSet, HashSet};
+    use type_equalities::IsEqual;
+
+    #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+    struct TestRef(u8);
+
+    #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+    struct TestBearer(TestRef);
+
+    impl Has<TestRef> for TestBearer {
+        fn select<U: IsEqual<TestRef>>(&self) -> TestRef {
+            self.0
+        }
+    }
+
+    #[test]
+    fn funding_selection_prefers_ref_between_consumed_refs() {
+        let account = TestRef(0x31);
+        let pool = TestRef(0x84);
+        let separator = TestBearer(TestRef(0x78));
+        let late = TestBearer(TestRef(0xd1));
+
+        let mut funding_pool = BTreeSet::from([late.clone(), separator.clone()]);
+        let consumed_versions = HashSet::from([account, pool]);
+        let selected = pop_preferred_funding(&mut funding_pool, &consumed_versions).unwrap();
+
+        assert_eq!(selected.select::<TestRef>(), separator.select::<TestRef>());
+        assert!(funding_pool.contains(&late));
+    }
+
+    #[test]
+    fn funding_selection_falls_back_to_lowest_ref_without_gap_candidate() {
+        let account = TestRef(0x31);
+        let pool = TestRef(0x84);
+        let late = TestBearer(TestRef(0xd1));
+
+        let mut funding_pool = BTreeSet::from([late.clone()]);
+        let consumed_versions = HashSet::from([account, pool]);
+        let selected = pop_preferred_funding(&mut funding_pool, &consumed_versions).unwrap();
+
+        assert_eq!(selected.select::<TestRef>(), late.select::<TestRef>());
+    }
+
+    #[test]
+    fn funding_selection_uses_lowest_ref_for_non_two_input_recipe() {
+        let mut funding_pool = BTreeSet::from([TestBearer(TestRef(0x20)), TestBearer(TestRef(0x78))]);
+        let consumed_versions = HashSet::from([TestRef(0x10), TestRef(0x50), TestRef(0x90)]);
+
+        let selected = pop_preferred_funding(&mut funding_pool, &consumed_versions).unwrap();
+
+        assert_eq!(selected.select::<TestRef>(), TestRef(0x20));
     }
 }

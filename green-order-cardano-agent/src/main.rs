@@ -3,7 +3,7 @@ use cml_chain::transaction::Transaction;
 use cml_crypto::TransactionHash;
 use either::Either;
 use futures::channel::mpsc;
-use futures::stream::FuturesUnordered;
+use futures::stream::{self, FuturesUnordered};
 use futures::{Stream, StreamExt};
 use log::{info, warn};
 use std::future;
@@ -18,6 +18,7 @@ use crate::context::{ExecutionContext, MakerContext};
 use crate::continuation_scanner::run_continuation_scanner;
 use crate::deployment::{GreenDeployedValidators, GreenProtocolDeployment, GreenScriptHashes};
 use crate::entity::EvolvingCardanoEntity;
+use crate::funding_bootstrap::{bootstrap_funding_from_explorer, seed_funding_index};
 use crate::http_intent_source::{router as http_intent_router, HttpIntentState};
 use crate::intent_source::{run_tcp_intent_source, GreenIntentEvent};
 use async_primitives::beacon::Beacon;
@@ -87,6 +88,7 @@ mod context;
 mod continuation_scanner;
 mod deployment;
 mod entity;
+mod funding_bootstrap;
 mod http_intent_source;
 mod intent_source;
 mod mpf;
@@ -267,6 +269,28 @@ async fn main() {
     let funding_index = Arc::new(Mutex::new(
         InMemoryKvIndex::new(config.event_cache_ttl, SystemClock).with_tracing("funding_index"),
     ));
+    let bootstrapped_funding = bootstrap_funding_from_explorer(
+        &explorer,
+        funding_addresses.clone(),
+        collateral.reference(),
+        config.min_operator_funding_lovelace,
+        100,
+    )
+    .await;
+    seed_funding_index(Arc::clone(&funding_index), &bootstrapped_funding).await;
+    let mut bootstrap_funding_p1 = Vec::new();
+    let mut bootstrap_funding_p2 = Vec::new();
+    let mut bootstrap_funding_p3 = Vec::new();
+    let mut bootstrap_funding_p4 = Vec::new();
+    for (partition, event) in bootstrapped_funding {
+        match partition {
+            0 => bootstrap_funding_p1.push(event),
+            1 => bootstrap_funding_p2.push(event),
+            2 => bootstrap_funding_p3.push(event),
+            3 => bootstrap_funding_p4.push(event),
+            _ => unreachable!("funding bootstrap returned an out-of-range partition"),
+        }
+    }
     let dao_ctx: DAOContext = config.dao_config.clone().into();
     let handler_context = HandlerContextProto {
         executor_cred: operator_paycred,
@@ -392,7 +416,7 @@ async fn main() {
             select_partition(pair_upd_recv_p1, config.partitioning.clone())
                 .buffered_within(config.event_feed_buffering_duration),
         ),
-        funding_upd_recv_p1,
+        stream::iter(bootstrap_funding_p1).chain(funding_upd_recv_p1),
         tx_submission_channel.clone(),
         reporting_channel.clone(),
         state_synced.clone(),
@@ -412,7 +436,7 @@ async fn main() {
             select_partition(pair_upd_recv_p2, config.partitioning.clone())
                 .buffered_within(config.event_feed_buffering_duration),
         ),
-        funding_upd_recv_p2,
+        stream::iter(bootstrap_funding_p2).chain(funding_upd_recv_p2),
         tx_submission_channel.clone(),
         reporting_channel.clone(),
         state_synced.clone(),
@@ -432,7 +456,7 @@ async fn main() {
             select_partition(pair_upd_recv_p3, config.partitioning.clone())
                 .buffered_within(config.event_feed_buffering_duration),
         ),
-        funding_upd_recv_p3,
+        stream::iter(bootstrap_funding_p3).chain(funding_upd_recv_p3),
         tx_submission_channel.clone(),
         reporting_channel.clone(),
         state_synced.clone(),
@@ -452,7 +476,7 @@ async fn main() {
             select_partition(pair_upd_recv_p4, config.partitioning)
                 .buffered_within(config.event_feed_buffering_duration),
         ),
-        funding_upd_recv_p4,
+        stream::iter(bootstrap_funding_p4).chain(funding_upd_recv_p4),
         tx_submission_channel,
         reporting_channel,
         state_synced.clone(),

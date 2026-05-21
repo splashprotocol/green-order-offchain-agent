@@ -1,0 +1,13 @@
+{
+  "lock": false,
+  "fmt": {
+    "lineWidth": 110,
+    "indentWidth": 2,
+    "semiColons": true,
+    "singleQuote": false
+  },
+  "tasks": {
+    "check": "deno check --no-lock 00-prepare-preprod-wallets.ts 01-create-royalty-v1-pool.ts 02-create-entitlements.ts 03-create-aleph-account-and-bind.ts 04-submit-green-order-smoke.ts 05-check-preprod-wallets.ts 06-deploy-aleph-reference-scripts.ts 07-prepare-operator-funding.ts 08-create-separator-funding.ts 09-deploy-royalty-v1-reference-script.ts",
+    "test": "deno test --no-lock --allow-read --allow-write tests"
+  }
+}

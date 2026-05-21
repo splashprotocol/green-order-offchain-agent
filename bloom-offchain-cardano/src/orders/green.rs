@@ -12,7 +12,7 @@ use cml_chain::plutus::utils::ConstrPlutusDataEncoding;
 use cml_chain::plutus::{ConstrPlutusData, PlutusData};
 use cml_chain::transaction::TransactionOutput;
 use cml_chain::PolicyId;
-use cml_core::serialization::{Deserialize as CmlDeserialize, LenEncoding, RawBytesEncoding, Serialize};
+use cml_core::serialization::{Deserialize as CmlDeserialize, LenEncoding, RawBytesEncoding};
 use cml_crypto::{blake2b224, blake2b256};
 use spectrum_cardano_lib::ex_units::ExUnits;
 use spectrum_cardano_lib::output::FinalizedTxOut;
@@ -81,8 +81,19 @@ impl GreenAuth {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum AlephAccountAbi {
+    Legacy,
+    Current,
+}
+
+fn current_aleph_account_abi() -> AlephAccountAbi {
+    AlephAccountAbi::Current
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct AlephAccountState {
+    pub abi: AlephAccountAbi,
     pub magic: Vec<u8>,
     pub allowlist: Vec<[u8; 28]>,
     pub nonce: Vec<i64>,
@@ -98,6 +109,17 @@ impl AlephAccountState {
         target_nonce_index: u16,
         target_nonce_value: u64,
     ) -> Option<Self> {
+        if self.abi == AlephAccountAbi::Legacy {
+            if target_nonce_index != 0 {
+                return None;
+            }
+            let nonce = self.nonce.get_mut(0)?;
+            if *nonce != target_nonce_value as i64 {
+                return None;
+            }
+            *nonce = nonce.checked_add(1)?;
+            return Some(self);
+        }
         let nonce = self.nonce.get_mut(target_nonce_index as usize)?;
         if *nonce > target_nonce_value as i64 {
             return None;
@@ -115,6 +137,8 @@ pub enum AlephAccountAction {
 
 #[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AlephIntention {
+    #[serde(default = "current_aleph_account_abi")]
+    pub abi: AlephAccountAbi,
     pub target_nonce_index: u16,
     pub target_nonce_value: u64,
     pub leaving_asset: AssetClass,
@@ -127,11 +151,33 @@ pub struct AlephIntention {
 
 impl AlephIntention {
     pub fn digest(&self) -> [u8; 32] {
-        blake2b256(self.clone().into_pd().to_cbor_bytes().as_ref())
+        blake2b256(self.aiken_cbor().as_ref())
     }
 
     pub fn intent_key(&self) -> Vec<u8> {
-        aleph_intent_key(self.target_nonce_index, self.target_nonce_value)
+        match self.abi {
+            AlephAccountAbi::Legacy => aleph_legacy_intent_key(self.target_nonce_value),
+            AlephAccountAbi::Current => aleph_intent_key(self.target_nonce_index, self.target_nonce_value),
+        }
+    }
+
+    pub fn aiken_cbor(&self) -> Vec<u8> {
+        let nonce_cbor = match self.abi {
+            AlephAccountAbi::Legacy => aiken_uint_cbor(self.target_nonce_value),
+            AlephAccountAbi::Current => aiken_tuple2_cbor(vec![
+                aiken_uint_cbor(u64::from(self.target_nonce_index)),
+                aiken_uint_cbor(self.target_nonce_value),
+            ]),
+        };
+        aiken_constr0_cbor(vec![
+            nonce_cbor,
+            asset_class_aiken_cbor(self.leaving_asset),
+            aiken_uint_cbor(self.leaving_amount),
+            asset_class_aiken_cbor(self.arriving_asset),
+            aiken_uint_cbor(self.expected_arriving_amount),
+            aiken_uint_cbor(self.fee_lovelace),
+            aiken_bytes_cbor(&self.operator),
+        ])
     }
 
     pub fn remaining_after_fill(
@@ -158,14 +204,14 @@ impl AlephIntention {
 }
 
 pub fn aleph_intent_key(target_nonce_index: u16, target_nonce_value: u64) -> Vec<u8> {
-    aiken_constr(
-        0,
-        vec![
-            u64::from(target_nonce_index).into_pd(),
-            target_nonce_value.into_pd(),
-        ],
-    )
-    .to_cbor_bytes()
+    aiken_tuple2_cbor(vec![
+        aiken_uint_cbor(u64::from(target_nonce_index)),
+        aiken_uint_cbor(target_nonce_value),
+    ])
+}
+
+pub fn aleph_legacy_intent_key(target_nonce_value: u64) -> Vec<u8> {
+    aiken_uint_cbor(target_nonce_value)
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -231,15 +277,94 @@ fn aiken_constr(alternative: u64, fields: Vec<PlutusData>) -> PlutusData {
 
 fn asset_class_into_pd(asset: AssetClass) -> PlutusData {
     match asset {
-        AssetClass::Native => aiken_constr(0, vec![Vec::<u8>::new().into_pd(), Vec::<u8>::new().into_pd()]),
-        AssetClass::Token(Token(policy, asset_name)) => aiken_constr(
-            0,
-            vec![
-                policy.to_raw_bytes().to_vec().into_pd(),
-                asset_name.as_bytes().to_vec().into_pd(),
-            ],
-        ),
+        AssetClass::Native => tuple_pd(vec![Vec::<u8>::new().into_pd(), Vec::<u8>::new().into_pd()]),
+        AssetClass::Token(Token(policy, asset_name)) => tuple_pd(vec![
+            policy.to_raw_bytes().to_vec().into_pd(),
+            asset_name.as_bytes().to_vec().into_pd(),
+        ]),
     }
+}
+
+fn tuple_pd(fields: Vec<PlutusData>) -> PlutusData {
+    PlutusData::List {
+        list: fields,
+        list_encoding: LenEncoding::Indefinite,
+    }
+}
+
+fn asset_class_aiken_cbor(asset: AssetClass) -> Vec<u8> {
+    match asset {
+        AssetClass::Native => aiken_tuple2_cbor(vec![aiken_bytes_cbor(&[]), aiken_bytes_cbor(&[])]),
+        AssetClass::Token(Token(policy, asset_name)) => aiken_tuple2_cbor(vec![
+            aiken_bytes_cbor(policy.to_raw_bytes().as_ref()),
+            aiken_bytes_cbor(asset_name.as_bytes()),
+        ]),
+    }
+}
+
+fn aiken_constr0_cbor(fields: Vec<Vec<u8>>) -> Vec<u8> {
+    let mut out = vec![0xd8, 0x79, 0x9f];
+    for field in fields {
+        out.extend(field);
+    }
+    out.push(0xff);
+    out
+}
+
+fn aiken_tuple2_cbor(fields: Vec<Vec<u8>>) -> Vec<u8> {
+    let mut out = vec![0x9f];
+    for field in fields {
+        out.extend(field);
+    }
+    out.push(0xff);
+    out
+}
+
+fn aiken_uint_cbor(value: u64) -> Vec<u8> {
+    match value {
+        0..=23 => vec![value as u8],
+        24..=0xff => vec![0x18, value as u8],
+        0x100..=0xffff => {
+            let mut out = vec![0x19];
+            out.extend((value as u16).to_be_bytes());
+            out
+        }
+        0x1_0000..=0xffff_ffff => {
+            let mut out = vec![0x1a];
+            out.extend((value as u32).to_be_bytes());
+            out
+        }
+        _ => {
+            let mut out = vec![0x1b];
+            out.extend(value.to_be_bytes());
+            out
+        }
+    }
+}
+
+fn aiken_bytes_cbor(bytes: &[u8]) -> Vec<u8> {
+    let len = bytes.len();
+    let mut out = match len {
+        0..=23 => vec![0x40 | len as u8],
+        24..=0xff => vec![0x58, len as u8],
+        0x100..=0xffff => {
+            let mut out = vec![0x59];
+            out.extend((len as u16).to_be_bytes());
+            out
+        }
+        0x1_0000..=0xffff_ffff => {
+            let mut out = vec![0x5a];
+            out.extend((len as u32).to_be_bytes());
+            out
+        }
+        _ => {
+            let mut out = vec![0x5b];
+            out.extend((len as u64).to_be_bytes());
+            out
+        }
+    };
+    out.extend(bytes);
+    out
 }
 
 impl IntoPlutusData for GreenAuth {
@@ -277,14 +402,35 @@ fn proof_plutus_data(proof: Vec<u8>) -> PlutusData {
 
 impl IntoPlutusData for AlephAccountState {
     fn into_pd(self) -> PlutusData {
-        let co_key = self.co_key.unwrap_or_default();
+        if self.abi == AlephAccountAbi::Legacy {
+            return aiken_constr(
+                0,
+                vec![
+                    self.magic.into_pd(),
+                    self.nonce
+                        .first()
+                        .copied()
+                        .expect("legacy Aleph account must carry one nonce")
+                        .into_pd(),
+                    self.main_key.into_pd(),
+                    self.store_root.into_pd(),
+                ],
+            );
+        }
+        let co_key = self.co_key.map_or_else(
+            || PlutusData::List {
+                list: vec![],
+                list_encoding: LenEncoding::Indefinite,
+            },
+            IntoPlutusData::into_pd,
+        );
         aiken_constr(
             0,
             vec![
                 self.magic.into_pd(),
                 self.allowlist.into_pd(),
                 self.nonce.into_pd(),
-                aiken_constr(0, vec![self.main_key.into_pd(), co_key.into_pd()]),
+                tuple_pd(vec![self.main_key.into_pd(), co_key]),
                 self.cold_key_hash.into_pd(),
                 self.store_root.into_pd(),
             ],
@@ -295,7 +441,7 @@ impl IntoPlutusData for AlephAccountState {
 impl IntoPlutusData for AlephAccountAction {
     fn into_pd(self) -> PlutusData {
         match self {
-            AlephAccountAction::Delegate(index) => aiken_constr(0, vec![index.into_pd()]),
+            AlephAccountAction::Delegate(delegate_index) => aiken_constr(0, vec![delegate_index.into_pd()]),
             AlephAccountAction::Direct => aiken_constr(1, vec![]),
         }
     }
@@ -303,16 +449,17 @@ impl IntoPlutusData for AlephAccountAction {
 
 impl IntoPlutusData for AlephIntention {
     fn into_pd(self) -> PlutusData {
+        let nonce = match self.abi {
+            AlephAccountAbi::Legacy => self.target_nonce_value.into_pd(),
+            AlephAccountAbi::Current => tuple_pd(vec![
+                u64::from(self.target_nonce_index).into_pd(),
+                self.target_nonce_value.into_pd(),
+            ]),
+        };
         aiken_constr(
             0,
             vec![
-                aiken_constr(
-                    0,
-                    vec![
-                        u64::from(self.target_nonce_index).into_pd(),
-                        self.target_nonce_value.into_pd(),
-                    ],
-                ),
+                nonce,
                 asset_class_into_pd(self.leaving_asset),
                 self.leaving_amount.into_pd(),
                 asset_class_into_pd(self.arriving_asset),
@@ -346,7 +493,29 @@ impl IntoPlutusData for AlephBatchRedeemer {
 impl TryFromPData for AlephAccountState {
     fn try_from_pd(data: PlutusData) -> Option<Self> {
         let mut cpd = data.into_constr_pd()?;
-        if cpd.alternative != 0 || cpd.fields.len() != 6 {
+        if cpd.alternative != 0 {
+            return None;
+        }
+        if cpd.fields.len() == 4 {
+            let magic = cpd.take_field(0)?.into_bytes()?;
+            let nonce = i64::try_from(cpd.take_field(1)?.into_i128()?).ok()?;
+            let main_key = cpd.take_field(2)?.into_bytes()?;
+            if main_key.len() != 33 {
+                return None;
+            }
+            let store_root = <[u8; 32]>::try_from(cpd.take_field(3)?.into_bytes()?).ok()?;
+            return Some(Self {
+                abi: AlephAccountAbi::Legacy,
+                magic,
+                allowlist: vec![],
+                nonce: vec![nonce],
+                main_key,
+                co_key: None,
+                cold_key_hash: [0; 28],
+                store_root,
+            });
+        }
+        if cpd.fields.len() != 6 {
             return None;
         }
         let magic = cpd.take_field(0)?.into_bytes()?;
@@ -362,22 +531,30 @@ impl TryFromPData for AlephAccountState {
             .into_iter()
             .map(|pd| pd.into_i128().and_then(|n| i64::try_from(n).ok()))
             .collect::<Option<Vec<_>>>()?;
-        let mut hot_cred = cpd.take_field(3)?.into_constr_pd()?;
-        let main_key = hot_cred.take_field(0)?.into_bytes()?;
+        let mut hot_cred = cpd.take_field(3)?.into_vec()?.into_iter();
+        let main_key = hot_cred.next()?.into_bytes()?;
         if main_key.len() != 33 {
             return None;
         }
-        let co_key_bytes = hot_cred.take_field(1)?.into_bytes()?;
-        let co_key = if co_key_bytes.is_empty() {
-            None
-        } else if co_key_bytes.len() == 33 {
-            Some(co_key_bytes)
-        } else {
+        let co_key_pd = hot_cred.next()?;
+        if hot_cred.next().is_some() {
             return None;
+        }
+        let co_key = match co_key_pd {
+            PlutusData::List { list, .. } if list.is_empty() => None,
+            pd => {
+                let bytes = pd.into_bytes()?;
+                if bytes.len() == 33 {
+                    Some(bytes)
+                } else {
+                    return None;
+                }
+            }
         };
         let cold_key_hash = <[u8; 28]>::try_from(cpd.take_field(4)?.into_bytes()?).ok()?;
         let store_root = <[u8; 32]>::try_from(cpd.take_field(5)?.into_bytes()?).ok()?;
         Some(Self {
+            abi: AlephAccountAbi::Current,
             magic,
             allowlist,
             nonce,
@@ -461,6 +638,7 @@ impl GreenOrder {
 
     pub fn aleph_intention(&self) -> AlephIntention {
         AlephIntention {
+            abi: AlephAccountAbi::Current,
             target_nonce_index: self.intention.target_nonce_slot,
             target_nonce_value: self.intention.target_nonce_value,
             leaving_asset: self.intention.input_asset,
@@ -657,7 +835,7 @@ impl MarketTaker for GreenOrder {
     }
 
     fn consumable_budget(&self) -> FeeAsset<u64> {
-        0
+        self.intention.fee_lovelace
     }
 
     fn marginal_cost_hint(&self) -> Self::U {
@@ -735,23 +913,27 @@ mod tests {
     use cml_chain::address::{Address, EnterpriseAddress};
     use cml_chain::assets::AssetBundle;
     use cml_chain::certs::Credential;
+    use cml_chain::plutus::PlutusData;
     use cml_chain::transaction::{ConwayFormatTxOut, DatumOption, TransactionOutput};
     use cml_chain::PolicyId;
     use cml_chain::Value;
     use cml_crypto::{ScriptHash, TransactionHash};
     use spectrum_cardano_lib::ex_units::ExUnits;
     use spectrum_cardano_lib::plutus_data::{ConstrPlutusDataExtension, IntoPlutusData, PlutusDataExtension};
+    use spectrum_cardano_lib::transaction::TransactionOutputExtension;
     use spectrum_cardano_lib::types::TryFromPData;
+    use spectrum_cardano_lib::value::ValueExtension;
     use spectrum_cardano_lib::{AssetClass, AssetName, OutputRef, Token};
     use spectrum_offchain::domain::{Has, Stable, Tradable};
     use spectrum_offchain_cardano::deployment::DeployedScriptInfo;
     use type_equalities::IsEqual;
 
     use super::{
-        AccountId, AlephAccountAction, AlephAccountState, AlephAccountUtxo, AlephAuthorizedIntention,
-        AlephBatchRedeemer, AlephIntention, GreenAuth, GreenIntention, GreenOrder, GreenOrderId,
-        GreenOrderValidationError, ALEPH_ACCOUNT_VALIDATOR,
+        apply_full_fill_to_account_output, AccountId, AlephAccountAbi, AlephAccountAction, AlephAccountState, AlephAccountUtxo,
+        AlephAuthorizedIntention, AlephBatchRedeemer, AlephIntention, GreenAuth, GreenIntention, GreenOrder,
+        GreenOrderId, GreenOrderValidationError, ALEPH_ACCOUNT_VALIDATOR,
     };
+    use cml_core::serialization::Serialize;
 
     fn token(seed: u8) -> Token {
         Token(
@@ -775,6 +957,7 @@ mod tests {
 
     fn aleph_intention() -> AlephIntention {
         AlephIntention {
+            abi: AlephAccountAbi::Current,
             target_nonce_index: 2,
             target_nonce_value: 10,
             leaving_asset: AssetClass::Native,
@@ -788,7 +971,8 @@ mod tests {
 
     fn account_state() -> AlephAccountState {
         AlephAccountState {
-            magic: b"green-test".to_vec(),
+            abi: AlephAccountAbi::Current,
+            magic: b"\x01".to_vec(),
             allowlist: vec![[11; 28], [12; 28]],
             nonce: vec![0, 0, 0, 0],
             main_key: vec![2; 33],
@@ -842,7 +1026,7 @@ mod tests {
     }
 
     #[test]
-    fn aleph_account_action_delegate_encoding() {
+    fn aleph_account_action_delegate_encodes_allowlist_index() {
         let mut cpd = AlephAccountAction::Delegate(0)
             .into_pd()
             .into_constr_pd()
@@ -863,7 +1047,20 @@ mod tests {
     #[test]
     fn aleph_account_state_roundtrip_and_nonce_update() {
         let state = account_state();
-        let parsed = AlephAccountState::try_from_pd(state.clone().into_pd()).unwrap();
+        let encoded = state.clone().into_pd();
+        let hot_cred = encoded
+            .clone()
+            .into_constr_pd()
+            .unwrap()
+            .take_field(3)
+            .unwrap()
+            .into_vec()
+            .unwrap();
+        assert!(matches!(
+            hot_cred.get(1),
+            Some(PlutusData::List { list, .. }) if list.is_empty()
+        ));
+        let parsed = AlephAccountState::try_from_pd(encoded).unwrap();
         let updated = parsed.with_sig_full_fill_nonce(2, 10).unwrap();
 
         assert_eq!(state.magic, updated.magic);
@@ -876,11 +1073,87 @@ mod tests {
     }
 
     #[test]
+    fn legacy_aleph_account_state_roundtrip_and_nonce_update() {
+        let state = AlephAccountState {
+            abi: AlephAccountAbi::Legacy,
+            magic: b"\x01".to_vec(),
+            allowlist: vec![],
+            nonce: vec![0],
+            main_key: vec![2; 33],
+            co_key: None,
+            cold_key_hash: [0; 28],
+            store_root: [14; 32],
+        };
+        let encoded = state.clone().into_pd();
+        let mut cpd = encoded.clone().into_constr_pd().unwrap();
+
+        assert_eq!(4, cpd.fields.len());
+        assert_eq!(0, cpd.take_field(1).unwrap().into_i128().unwrap());
+        let parsed = AlephAccountState::try_from_pd(encoded).unwrap();
+        let updated = parsed.with_sig_full_fill_nonce(0, 0).unwrap();
+
+        assert_eq!(AlephAccountAbi::Legacy, updated.abi);
+        assert_eq!(vec![1], updated.nonce);
+        assert_eq!(state.main_key, updated.main_key);
+        assert_eq!(state.store_root, updated.store_root);
+    }
+
+    #[test]
     fn aleph_intention_digest_is_stable() {
         let digest = aleph_intention().digest();
 
         assert_eq!(digest, aleph_intention().digest());
+        assert_eq!(
+            hex::encode(digest),
+            "224624d7aaca91e4cff7ade3f50e01172db3ccc048edaff9d6a5bbc9a8a77982"
+        );
         assert_eq!(32, digest.len());
+    }
+
+    #[test]
+    fn aleph_intention_digest_uses_aiken_tuple_cbor() {
+        let intent = AlephIntention {
+            abi: AlephAccountAbi::Current,
+            target_nonce_index: 0,
+            target_nonce_value: 1,
+            leaving_asset: AssetClass::Native,
+            leaving_amount: 1_000_000,
+            arriving_asset: AssetClass::Token(Token(
+                PolicyId::from_hex("aaf945ecdbe9256312f8d90bdd7cd904f558e9be2cf7aa92c4c2bf19").unwrap(),
+                AssetName::try_from_hex("677265656e61a6ae0db12dbdc9").unwrap(),
+            )),
+            expected_arriving_amount: 1,
+            fee_lovelace: 2_000_000,
+            operator: hex::decode("cd52b4976906bfe539d5c8cc6d8101f3648c924bd58f3ffed43f46e9")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        };
+
+        assert_eq!(
+            hex::encode(intent.aiken_cbor()),
+            concat!(
+                "d8799f",
+                "9f0001ff",
+                "9f4040ff",
+                "1a000f4240",
+                "9f581caaf945ecdbe9256312f8d90bdd7cd904f558e9be2cf7aa92c4c2bf19",
+                "4d677265656e61a6ae0db12dbdc9ff",
+                "01",
+                "1a001e8480",
+                "581ccd52b4976906bfe539d5c8cc6d8101f3648c924bd58f3ffed43f46e9",
+                "ff"
+            )
+        );
+        assert_eq!(
+            hex::encode(intent.clone().into_pd().to_cbor_bytes()),
+            hex::encode(intent.aiken_cbor())
+        );
+        assert_eq!(
+            hex::encode(intent.digest()),
+            "8ab23d6f544cc866eed7021dd349318a0533e826cd3e9cb89bd25502abcb63b5"
+        );
+        assert_eq!(hex::encode(intent.intent_key()), "9f0001ff");
     }
 
     #[test]
@@ -898,6 +1171,127 @@ mod tests {
         assert_eq!(0, cpd.alternative);
         assert_eq!(1, intentions.len());
     }
+
+    #[test]
+    fn preprod_smoke_authorized_intention_and_redeemer_bytes_are_stable() {
+        let intent = AlephIntention {
+            abi: AlephAccountAbi::Current,
+            target_nonce_index: 0,
+            target_nonce_value: 1,
+            leaving_asset: AssetClass::Native,
+            leaving_amount: 1_000_000,
+            arriving_asset: AssetClass::Token(Token(
+                PolicyId::from_hex("aaf945ecdbe9256312f8d90bdd7cd904f558e9be2cf7aa92c4c2bf19").unwrap(),
+                AssetName::try_from_hex("677265656e61a6ae0db12dbdc9").unwrap(),
+            )),
+            expected_arriving_amount: 1,
+            fee_lovelace: 2_000_000,
+            operator: hex::decode("cd52b4976906bfe539d5c8cc6d8101f3648c924bd58f3ffed43f46e9")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        };
+        let signature =
+            hex::decode(concat!(
+                "838fb3e690935441c4592598dc58681ed761c11265dc4ccc5053ace2ac655f225",
+                "0ec178766363dd1fe2f62df66aeb240241c0f2fd048b4a76c071a95ae0d1ed2",
+            ))
+            .unwrap();
+        let authorized = AlephAuthorizedIntention {
+            intent: intent.clone(),
+            remainder: 0,
+            auth: GreenAuth::new_sig(vec![], vec![], signature, vec![]).unwrap(),
+        };
+        let authorized_cbor = authorized.clone().into_pd().to_cbor_bytes();
+        let redeemer_cbor = AlephBatchRedeemer {
+            intentions: vec![authorized],
+        }
+        .into_pd()
+        .to_cbor_bytes();
+
+        assert_eq!(
+            hex::encode(intent.digest()),
+            "8ab23d6f544cc866eed7021dd349318a0533e826cd3e9cb89bd25502abcb63b5"
+        );
+        assert_eq!(
+            hex::encode(authorized_cbor),
+            concat!(
+                "d8799f",
+                "d8799f9f0001ff9f4040ff1a000f42409f581caaf945ecdbe9256312f8d90bdd7cd904f558e9be2cf7aa92c4c2bf194d677265656e61a6ae0db12dbdc9ff011a001e8480581ccd52b4976906bfe539d5c8cc6d8101f3648c924bd58f3ffed43f46e9ff",
+                "00",
+                "d87a9f40405840838fb3e690935441c4592598dc58681ed761c11265dc4ccc5053ace2ac655f2250ec178766363dd1fe2f62df66aeb240241c0f2fd048b4a76c071a95ae0d1ed29fff",
+                "ffff"
+            )
+        );
+        assert_eq!(
+            hex::encode(redeemer_cbor),
+            concat!(
+                "d8799f9f",
+                "d8799f",
+                "d8799f9f0001ff9f4040ff1a000f42409f581caaf945ecdbe9256312f8d90bdd7cd904f558e9be2cf7aa92c4c2bf194d677265656e61a6ae0db12dbdc9ff011a001e8480581ccd52b4976906bfe539d5c8cc6d8101f3648c924bd58f3ffed43f46e9ff",
+                "00",
+                "d87a9f40405840838fb3e690935441c4592598dc58681ed761c11265dc4ccc5053ace2ac655f2250ec178766363dd1fe2f62df66aeb240241c0f2fd048b4a76c071a95ae0d1ed29fff",
+                "ffff",
+                "ffff"
+            )
+        );
+    }
+
+    #[test]
+    fn preprod_smoke_account_value_transition_matches_aleph_witness_rules() {
+        let output_asset = AssetClass::Token(Token(
+            PolicyId::from_hex("aaf945ecdbe9256312f8d90bdd7cd904f558e9be2cf7aa92c4c2bf19").unwrap(),
+            AssetName::try_from_hex("677265656e61a6ae0db12dbdc9").unwrap(),
+        ));
+        let account_id = AccountId::try_from_slice(&[9; 32]).unwrap();
+        let order = GreenOrder {
+            id: GreenOrderId::new(
+                account_id,
+                0,
+                1,
+                hex::decode("8ab23d6f544cc866eed7021dd349318a0533e826cd3e9cb89bd25502abcb63b5")
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+            ),
+            account_id,
+            intention: GreenIntention {
+                input_asset: AssetClass::Native,
+                output_asset,
+                leaving_amount: 1_000_000,
+                expected_arriving_amount: 1,
+                fee_lovelace: 2_000_000,
+                target_nonce_slot: 0,
+                target_nonce_value: 1,
+                operator_key_hash: hex::decode("cd52b4976906bfe539d5c8cc6d8101f3648c924bd58f3ffed43f46e9")
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+            },
+            accumulated_output: 0,
+            current_remainder: 1_000_000,
+            auth: GreenAuth::new_sig(vec![], vec![], vec![0; 64], vec![]).unwrap(),
+        };
+        let mut account_output = TransactionOutput::new_conway_format_tx_out(ConwayFormatTxOut {
+            address: Address::Enterprise(EnterpriseAddress::new(0, Credential::new_script(ScriptHash::from([9; 28])))),
+            amount: Value::new(25_000_000, AssetBundle::new()),
+            datum_option: Some(DatumOption::Datum {
+                datum: account_state().into_pd(),
+                len_encoding: Default::default(),
+                tag_encoding: None,
+                datum_tag_encoding: None,
+                datum_bytes_encoding: Default::default(),
+            }),
+            script_reference: None,
+            encodings: None,
+        });
+
+        apply_full_fill_to_account_output(&mut account_output, &order, 1_000_000, 299, 2_000_000).unwrap();
+
+        assert_eq!(Some(22_000_000), account_output.value().amount_of(AssetClass::Native));
+        assert_eq!(Some(299), account_output.value().amount_of(output_asset));
+    }
+
 
     #[test]
     fn rejects_wrong_account_id_length() {
@@ -990,6 +1384,47 @@ mod tests {
         assert_eq!(
             spectrum_offchain_cardano::data::pair::PairId::canonical(intent.input_asset, intent.output_asset),
             order.pair_id()
+        );
+    }
+
+    #[test]
+    fn legacy_aleph_intention_digest_uses_single_nonce_cbor() {
+        let intent = AlephIntention {
+            abi: AlephAccountAbi::Legacy,
+            target_nonce_index: 0,
+            target_nonce_value: 0,
+            leaving_asset: AssetClass::Native,
+            leaving_amount: 1_000_000,
+            arriving_asset: AssetClass::Token(Token(
+                PolicyId::from_hex("aaf945ecdbe9256312f8d90bdd7cd904f558e9be2cf7aa92c4c2bf19").unwrap(),
+                AssetName::try_from_hex("677265656e61a6ae0db12dbdc9").unwrap(),
+            )),
+            expected_arriving_amount: 1,
+            fee_lovelace: 2_000_000,
+            operator: hex::decode("cd52b4976906bfe539d5c8cc6d8101f3648c924bd58f3ffed43f46e9")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        };
+
+        assert_eq!(
+            hex::encode(intent.aiken_cbor()),
+            concat!(
+                "d8799f",
+                "00",
+                "9f4040ff",
+                "1a000f4240",
+                "9f581caaf945ecdbe9256312f8d90bdd7cd904f558e9be2cf7aa92c4c2bf19",
+                "4d677265656e61a6ae0db12dbdc9ff",
+                "01",
+                "1a001e8480",
+                "581ccd52b4976906bfe539d5c8cc6d8101f3648c924bd58f3ffed43f46e9",
+                "ff"
+            )
+        );
+        assert_eq!(
+            hex::encode(intent.clone().into_pd().to_cbor_bytes()),
+            hex::encode(intent.aiken_cbor())
         );
     }
 

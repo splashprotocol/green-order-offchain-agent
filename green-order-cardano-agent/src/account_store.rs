@@ -264,13 +264,14 @@ fn trie_from_leaves(leaves: &BTreeMap<Vec<u8>, StoredIntentLeaf>) -> mpf::Trie {
 
 #[cfg(test)]
 mod tests {
-    use bloom_offchain_cardano::orders::green::{AccountId, AlephIntention, GreenOrderId};
+    use bloom_offchain_cardano::orders::green::{AccountId, AlephAccountAbi, AlephIntention, GreenOrderId};
     use spectrum_cardano_lib::AssetClass;
 
     use super::{AccountStore, StoredIntentStatus, ALEPH_MPF_EMPTY_ROOT};
 
     fn intent(leaving_amount: u64) -> AlephIntention {
         AlephIntention {
+            abi: AlephAccountAbi::Current,
             target_nonce_index: 0,
             target_nonce_value: 42,
             leaving_asset: AssetClass::Native,

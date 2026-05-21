@@ -33,6 +33,14 @@ pub struct IndexedAccount {
     pub store: AccountStore,
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum AccountBindingError {
+    AlreadyBound,
+    OutputAlreadyBound,
+    OutputNotObserved,
+    NonEmptyUnplannedRoot,
+}
+
 impl AccountIndex {
     pub fn with_persistence_path(path: PathBuf) -> Self {
         let mut index = Self {
@@ -304,6 +312,45 @@ impl AccountIndex {
         self.current(account_id)
     }
 
+    pub fn bind_external_account_id_once(
+        &mut self,
+        account_id: AccountId,
+        output_ref: OutputRef,
+    ) -> Result<FinalizedTxOut, AccountBindingError> {
+        if self.by_account_id.contains_key(&account_id)
+            || self.pending_by_account_id.contains(&account_id)
+            || self
+                .persisted_by_output_ref
+                .values()
+                .any(|(persisted_id, _)| *persisted_id == account_id)
+        {
+            return Err(AccountBindingError::AlreadyBound);
+        }
+        if self.by_output_ref.contains_key(&output_ref)
+            || self.persisted_by_output_ref.contains_key(&output_ref)
+        {
+            return Err(AccountBindingError::OutputAlreadyBound);
+        }
+
+        let account = self
+            .unbound_by_output_ref
+            .remove(&output_ref)
+            .ok_or(AccountBindingError::OutputNotObserved)?;
+        let Some(store) = AccountStore::from_observed_root(account.state.store_root) else {
+            self.unbound_by_output_ref.insert(output_ref, account);
+            return Err(AccountBindingError::NonEmptyUnplannedRoot);
+        };
+        self.bind_indexed(
+            account_id,
+            IndexedAccount {
+                utxo: FinalizedTxOut::new(account.output, account.output_ref),
+                store,
+            },
+        );
+        self.current(account_id)
+            .ok_or(AccountBindingError::OutputNotObserved)
+    }
+
     pub fn bind_confirmed_predicted_store(
         &mut self,
         predicted_output_ref: OutputRef,
@@ -496,7 +543,7 @@ fn persist_account_stores(
 #[cfg(test)]
 mod tests {
     use bloom_offchain_cardano::orders::green::{
-        AccountId, AlephAccountState, AlephAccountUtxo, AlephIntention, GreenOrderId,
+        AccountId, AlephAccountAbi, AlephAccountState, AlephAccountUtxo, AlephIntention, GreenOrderId,
     };
     use cml_chain::address::Address;
     use cml_chain::assets::Coin;
@@ -507,7 +554,7 @@ mod tests {
     use spectrum_cardano_lib::AssetClass;
     use spectrum_cardano_lib::OutputRef;
 
-    use super::{AccountIndex, IndexedAccount};
+    use super::{AccountBindingError, AccountIndex, IndexedAccount};
 
     fn account_id(byte: u8) -> AccountId {
         AccountId::try_from_slice(&[byte; 32]).unwrap()
@@ -538,6 +585,7 @@ mod tests {
             output_ref,
             output,
             state: AlephAccountState {
+                abi: AlephAccountAbi::Current,
                 magic: vec![1, 2, 3],
                 allowlist: vec![],
                 nonce: vec![0],
@@ -555,6 +603,7 @@ mod tests {
 
     fn intent(leaving_amount: u64) -> AlephIntention {
         AlephIntention {
+            abi: AlephAccountAbi::Current,
             target_nonce_index: 0,
             target_nonce_value: 42,
             leaving_asset: AssetClass::Native,
@@ -627,6 +676,114 @@ mod tests {
         assert_eq!(finalized.reference(), out_ref);
         assert_eq!(finalized.0, output);
         assert_eq!(index.current(id), Some(finalized));
+    }
+
+    #[test]
+    fn external_binding_rejects_second_bind_for_same_account_id() {
+        let id = account_id(20);
+        let ref_1 = output_ref(20);
+        let ref_2 = output_ref(21);
+        let mut index = AccountIndex::default();
+        index.observe_created_or_updated(account_utxo(ref_1, dummy_output(2_000_000)));
+        index.observe_created_or_updated(account_utxo(ref_2, dummy_output(2_000_000)));
+
+        assert!(index.bind_external_account_id_once(id, ref_1).is_ok());
+        assert_eq!(
+            index.bind_external_account_id_once(id, ref_2),
+            Err(AccountBindingError::AlreadyBound)
+        );
+        assert_eq!(index.current(id).map(|account| account.reference()), Some(ref_1));
+    }
+
+    #[test]
+    fn external_binding_rejects_output_already_bound_to_other_account_id() {
+        let id_1 = account_id(21);
+        let id_2 = account_id(22);
+        let out_ref = output_ref(22);
+        let mut index = AccountIndex::default();
+        index.observe_created_or_updated(account_utxo(out_ref, dummy_output(2_000_000)));
+
+        assert!(index.bind_external_account_id_once(id_1, out_ref).is_ok());
+        assert_eq!(
+            index.bind_external_account_id_once(id_2, out_ref),
+            Err(AccountBindingError::OutputAlreadyBound)
+        );
+    }
+
+    #[test]
+    fn external_binding_rejects_unknown_output_ref() {
+        let id = account_id(23);
+        let mut index = AccountIndex::default();
+
+        assert_eq!(
+            index.bind_external_account_id_once(id, output_ref(23)),
+            Err(AccountBindingError::OutputNotObserved)
+        );
+    }
+
+    #[test]
+    fn one_time_binding_survives_restart_via_persisted_store() {
+        let id = account_id(24);
+        let out_ref = output_ref(24);
+        let output = dummy_output(2_000_000);
+        let path = std::env::temp_dir().join(format!(
+            "green-account-binding-test-{}-once.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let mut index = AccountIndex::with_persistence_path(path.clone());
+            index.observe_created_or_updated(account_utxo(out_ref, output.clone()));
+            assert!(index.bind_external_account_id_once(id, out_ref).is_ok());
+        }
+
+        let mut reloaded = AccountIndex::with_persistence_path(path.clone());
+        assert_eq!(reloaded.current(id), None);
+        reloaded.observe_created_or_updated(account_utxo(out_ref, output));
+
+        assert_eq!(
+            reloaded.current(id).map(|account| account.reference()),
+            Some(out_ref)
+        );
+        assert_eq!(
+            reloaded.bind_external_account_id_once(id, out_ref),
+            Err(AccountBindingError::AlreadyBound)
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn persisted_output_ref_cannot_be_rebound_to_different_account_before_lazy_restore() {
+        let id_1 = account_id(26);
+        let id_2 = account_id(27);
+        let out_ref = output_ref(27);
+        let output = dummy_output(2_000_000);
+        let path = std::env::temp_dir().join(format!(
+            "green-account-binding-test-{}-persisted-output-ref.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let mut index = AccountIndex::with_persistence_path(path.clone());
+            index.observe_created_or_updated(account_utxo(out_ref, output.clone()));
+            assert!(index.bind_external_account_id_once(id_1, out_ref).is_ok());
+        }
+
+        let mut reloaded = AccountIndex::with_persistence_path(path.clone());
+        assert_eq!(reloaded.current(id_1), None);
+
+        assert_eq!(
+            reloaded.bind_external_account_id_once(id_2, out_ref),
+            Err(AccountBindingError::OutputAlreadyBound)
+        );
+        reloaded.observe_created_or_updated(account_utxo(out_ref, output));
+        assert_eq!(
+            reloaded.current(id_1).map(|account| account.reference()),
+            Some(out_ref)
+        );
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -773,6 +930,45 @@ mod tests {
 
         assert_eq!(continuations.len(), 1);
         assert_eq!(continuations[0].0.id, canonical_order_id);
+    }
+
+    #[test]
+    fn once_bound_account_tracks_planned_later_account_output_without_rebinding() {
+        let id = account_id(25);
+        let old_ref = output_ref(25);
+        let new_ref = output_ref(26);
+        let old_output = dummy_output(2_000_000);
+        let new_output = dummy_output(2_100_000);
+        let canonical_order_id = GreenOrderId::new(id, 0, 42, [25; 32]);
+        let updated_intent = intent(500);
+        let mut index = AccountIndex::default();
+
+        index.observe_created_or_updated(account_utxo(old_ref, old_output));
+        index.bind_external_account_id_once(id, old_ref).unwrap();
+
+        let planned = index
+            .plan_sig_insert(
+                id,
+                old_ref,
+                canonical_order_id,
+                updated_intent.intent_key(),
+                updated_intent,
+            )
+            .unwrap();
+
+        index.observe_transaction(
+            [old_ref],
+            [account_utxo_with_root(new_ref, new_output, planned.new_root)],
+        );
+
+        assert_eq!(
+            index.current(id).map(|account| account.reference()),
+            Some(new_ref)
+        );
+        assert_eq!(
+            index.bind_external_account_id_once(id, new_ref),
+            Err(AccountBindingError::AlreadyBound)
+        );
     }
 
     #[test]

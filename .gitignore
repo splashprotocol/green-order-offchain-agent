@@ -18,6 +18,11 @@ token.txt
 node_modules/
 state_data/
 state/
+green-order-cardano-agent/e2e/preprod/.env
+green-order-cardano-agent/e2e/preprod/.env.wallets
+green-order-cardano-agent/e2e/preprod/.env.operator
+green-order-cardano-agent/e2e/preprod/.state/
+green-order-cardano-agent/resources/preprod.maestro.key
 splash-dao-administration/resources/preprod_deployment.json
 splash-testing-cardano/package-lock.json
 splash-dao-administration/resources/test_wallet_keys.json
