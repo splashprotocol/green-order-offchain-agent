@@ -1,5 +1,6 @@
 import { CML, Lucid } from "npm:@lucid-evolution/lucid@0.3.53";
 import { submitSignedTx } from "./src/lucid.ts";
+import { assertWritableAgentConfig, resolveAgentConfigPath } from "./src/operator_config.ts";
 import { loadPreprodEnv, lovelaceToAda, preprodProvider } from "./src/provider.ts";
 
 type OperatorState = {
@@ -12,7 +13,7 @@ type OperatorState = {
 
 const statePath = ".state/preprod-operator.json";
 const envPath = ".env.operator";
-const agentConfigPath = "../../resources/preprod.config.json";
+const agentConfigPath = resolveAgentConfigPath(Deno.env.get("AGENT_CONFIG_PATH"));
 const operatorFundingLovelace = 50_000_000n;
 
 await loadPreprodEnv();
@@ -105,12 +106,14 @@ async function writeOperatorEnv(operator: OperatorState): Promise<void> {
 }
 
 async function writeAgentConfig(operatorKey: string): Promise<void> {
+  assertWritableAgentConfig(agentConfigPath, { partialE2e: Deno.env.get("PARTIAL_E2E") === "1" });
   const config = JSON.parse(await Deno.readTextFile(agentConfigPath));
   config.operatorKey = operatorKey;
   config.minOperatorFundingLovelace = Number(operatorFundingLovelace);
   config.node = { ...config.node, path: "/Users/aleksandr/node-external/node.socket", magic: 1 };
   config.networkId = 0;
   await Deno.writeTextFile(agentConfigPath, `${JSON.stringify(config, null, 2)}\n`);
+  console.log(`Updated agent config ${agentConfigPath}`);
 }
 
 async function hasUsableOperatorFunding(operator: OperatorState): Promise<boolean> {

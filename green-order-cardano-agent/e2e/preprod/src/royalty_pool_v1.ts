@@ -45,7 +45,7 @@ export function planRoyaltyPool(
     assetX: ADA_WIRE,
     assetY,
     assetLq,
-    lpFeeNum: 30n,
+    lpFeeNum: 99_700n,
     treasuryFeeNum: 0n,
     royaltyFeeNum: 0n,
     treasuryX: 0n,

@@ -681,7 +681,7 @@ where
             Side::Bid => AbsolutePrice::new(input, output),
             Side::Ask => AbsolutePrice::new(output, input),
         })?;
-    if input > 0 && demand == input {
+    if input > 0 && input <= demand {
         return Some((
             maker.stable_id(),
             FillPreview {
@@ -1261,7 +1261,7 @@ pub mod tests {
     }
 
     #[test]
-    fn optimized_market_maker_preview_rejects_partial_input() {
+    fn optimized_market_maker_preview_accepts_partial_input() {
         #[derive(Copy, Clone, Debug, Eq, PartialEq)]
         struct OptimizedPreviewPool {
             id: u8,
@@ -1351,14 +1351,25 @@ pub mod tests {
             available_output: 100,
             price,
         };
+        let oversized_pool = OptimizedPreviewPool {
+            id: 3,
+            available_input: 120,
+            available_output: 120,
+            price,
+        };
 
-        assert!(
-            super::try_optimized_swap(&taker, price, taker.input(), taker.side(), &partial_pool).is_none()
+        assert_eq!(
+            super::try_optimized_swap(&taker, price, taker.input(), taker.side(), &partial_pool)
+                .map(|(id, preview)| (id, preview.input)),
+            Some((1, 60))
         );
         assert_eq!(
             super::try_optimized_swap(&taker, price, taker.input(), taker.side(), &full_pool)
                 .map(|(id, preview)| (id, preview.input)),
             Some((2, 100))
+        );
+        assert!(
+            super::try_optimized_swap(&taker, price, taker.input(), taker.side(), &oversized_pool).is_none()
         );
     }
 

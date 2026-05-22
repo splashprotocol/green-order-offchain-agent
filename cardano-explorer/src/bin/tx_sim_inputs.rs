@@ -1,13 +1,13 @@
 use std::{env, fs};
 
+use cbor_event::se::Serializer;
 use cml_chain::address::Address;
 use cml_chain::assets::AssetName;
 use cml_chain::plutus::{PlutusData, PlutusV1Script, PlutusV2Script, PlutusV3Script};
 use cml_chain::transaction::{DatumOption, Transaction, TransactionInput, TransactionOutput};
-use cml_chain::{PolicyId, Script, Value};
 use cml_chain::Deserialize;
+use cml_chain::{PolicyId, Script, Value};
 use cml_core::serialization::Serialize;
-use cbor_event::se::Serializer;
 use cml_crypto::TransactionHash;
 use serde::Deserialize as SerdeDeserialize;
 
@@ -63,7 +63,8 @@ async fn main() {
             })
             .unwrap_or_else(|| panic!("missing input {}#{}", input.transaction_id, input.index));
         let row = utxos.remove(idx);
-        let utxo = parse_utxo_json(row.clone()).unwrap_or_else(|| panic!("failed to parse {ref_text}: {row}"));
+        let utxo =
+            parse_utxo_json(row.clone()).unwrap_or_else(|| panic!("failed to parse {ref_text}: {row}"));
         inputs.push(utxo.input);
         outputs.push(utxo.output);
     }
@@ -116,7 +117,9 @@ struct KoiosAsset {
     quantity: String,
 }
 
-fn parse_utxo_json(row: serde_json::Value) -> Option<cml_chain::builders::tx_builder::TransactionUnspentOutput> {
+fn parse_utxo_json(
+    row: serde_json::Value,
+) -> Option<cml_chain::builders::tx_builder::TransactionUnspentOutput> {
     let utxo: KoiosUtxo = serde_json::from_value(row).ok()?;
     let mut value = Value::zero();
     value.coin = utxo.value.parse::<u64>().ok()?;
@@ -126,13 +129,11 @@ fn parse_utxo_json(row: serde_json::Value) -> Option<cml_chain::builders::tx_bui
         let quantity = asset.quantity.parse::<u64>().ok()?;
         value.multiasset.set(policy, asset_name, quantity);
     }
-    let datum = utxo
-        .inline_datum
-        .and_then(|datum| {
-            PlutusData::from_cbor_bytes(hex::decode(datum.bytes).ok()?.as_slice())
-                .ok()
-                .map(DatumOption::new_datum)
-        });
+    let datum = utxo.inline_datum.and_then(|datum| {
+        PlutusData::from_cbor_bytes(hex::decode(datum.bytes).ok()?.as_slice())
+            .ok()
+            .map(DatumOption::new_datum)
+    });
     let script = utxo.reference_script.and_then(|script| {
         let bytes = hex::decode(script.bytes).ok()?;
         match script.script_type.as_str() {
@@ -143,7 +144,15 @@ fn parse_utxo_json(row: serde_json::Value) -> Option<cml_chain::builders::tx_bui
         }
     });
     Some(cml_chain::builders::tx_builder::TransactionUnspentOutput::new(
-        TransactionInput::new(TransactionHash::from_hex(utxo.tx_hash.as_str()).ok()?, utxo.tx_index),
-        TransactionOutput::new(Address::from_bech32(utxo.address.as_str()).ok()?, value, datum, script),
+        TransactionInput::new(
+            TransactionHash::from_hex(utxo.tx_hash.as_str()).ok()?,
+            utxo.tx_index,
+        ),
+        TransactionOutput::new(
+            Address::from_bech32(utxo.address.as_str()).ok()?,
+            value,
+            datum,
+            script,
+        ),
     ))
 }

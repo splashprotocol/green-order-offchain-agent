@@ -843,7 +843,7 @@ impl MarketTaker for GreenOrder {
     }
 
     fn min_marginal_output(&self) -> OutputAsset<u64> {
-        self.intention.expected_arriving_amount
+        1
     }
 
     fn time_bounds(&self) -> TimeBounds<u64> {
@@ -929,9 +929,9 @@ mod tests {
     use type_equalities::IsEqual;
 
     use super::{
-        apply_full_fill_to_account_output, AccountId, AlephAccountAbi, AlephAccountAction, AlephAccountState, AlephAccountUtxo,
-        AlephAuthorizedIntention, AlephBatchRedeemer, AlephIntention, GreenAuth, GreenIntention, GreenOrder,
-        GreenOrderId, GreenOrderValidationError, ALEPH_ACCOUNT_VALIDATOR,
+        apply_full_fill_to_account_output, AccountId, AlephAccountAbi, AlephAccountAction, AlephAccountState,
+        AlephAccountUtxo, AlephAuthorizedIntention, AlephBatchRedeemer, AlephIntention, GreenAuth,
+        GreenIntention, GreenOrder, GreenOrderId, GreenOrderValidationError, ALEPH_ACCOUNT_VALIDATOR,
     };
     use cml_core::serialization::Serialize;
 
@@ -1191,12 +1191,11 @@ mod tests {
                 .try_into()
                 .unwrap(),
         };
-        let signature =
-            hex::decode(concat!(
-                "838fb3e690935441c4592598dc58681ed761c11265dc4ccc5053ace2ac655f225",
-                "0ec178766363dd1fe2f62df66aeb240241c0f2fd048b4a76c071a95ae0d1ed2",
-            ))
-            .unwrap();
+        let signature = hex::decode(concat!(
+            "838fb3e690935441c4592598dc58681ed761c11265dc4ccc5053ace2ac655f225",
+            "0ec178766363dd1fe2f62df66aeb240241c0f2fd048b4a76c071a95ae0d1ed2",
+        ))
+        .unwrap();
         let authorized = AlephAuthorizedIntention {
             intent: intent.clone(),
             remainder: 0,
@@ -1273,7 +1272,10 @@ mod tests {
             auth: GreenAuth::new_sig(vec![], vec![], vec![0; 64], vec![]).unwrap(),
         };
         let mut account_output = TransactionOutput::new_conway_format_tx_out(ConwayFormatTxOut {
-            address: Address::Enterprise(EnterpriseAddress::new(0, Credential::new_script(ScriptHash::from([9; 28])))),
+            address: Address::Enterprise(EnterpriseAddress::new(
+                0,
+                Credential::new_script(ScriptHash::from([9; 28])),
+            )),
             amount: Value::new(25_000_000, AssetBundle::new()),
             datum_option: Some(DatumOption::Datum {
                 datum: account_state().into_pd(),
@@ -1288,10 +1290,12 @@ mod tests {
 
         apply_full_fill_to_account_output(&mut account_output, &order, 1_000_000, 299, 2_000_000).unwrap();
 
-        assert_eq!(Some(22_000_000), account_output.value().amount_of(AssetClass::Native));
+        assert_eq!(
+            Some(22_000_000),
+            account_output.value().amount_of(AssetClass::Native)
+        );
         assert_eq!(Some(299), account_output.value().amount_of(output_asset));
     }
-
 
     #[test]
     fn rejects_wrong_account_id_length() {
@@ -1488,5 +1492,27 @@ mod tests {
 
         assert_eq!(intent.fee_lovelace, finalized.consumed_fee());
         assert_eq!(0, finalized.consumed_budget());
+    }
+
+    #[test]
+    fn green_order_allows_nonzero_partial_marginal_output() {
+        let account_id = AccountId::try_from_slice(&[9; 32]).unwrap();
+        let intent = intention();
+        let id = GreenOrderId::new(
+            account_id,
+            intent.target_nonce_slot,
+            intent.target_nonce_value,
+            [5; 32],
+        );
+        let order = GreenOrder {
+            id,
+            account_id,
+            intention: intent,
+            accumulated_output: 0,
+            current_remainder: 500_000,
+            auth: GreenAuth::new_sig(vec![], vec![], vec![3; 64], vec![]).unwrap(),
+        };
+
+        assert_eq!(1, order.min_marginal_output());
     }
 }

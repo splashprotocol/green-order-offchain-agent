@@ -33,6 +33,16 @@ pub struct IndexedAccount {
     pub store: AccountStore,
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountStatus {
+    pub current: bool,
+    pub persisted: bool,
+    pub pending: bool,
+    pub unbound: bool,
+    pub predicted: bool,
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum AccountBindingError {
     AlreadyBound,
@@ -48,11 +58,27 @@ impl AccountIndex {
             ..Default::default()
         };
         match load_persisted_stores(&path) {
-            Ok(stores) => {
-                index.persisted_by_output_ref = stores
+            Ok(state) => {
+                index.persisted_by_output_ref = state
+                    .stores
                     .into_iter()
                     .map(|store| (store.output_ref, (store.account_id, store.store)))
                     .collect();
+                index.pending_store_by_snapshot_id = state
+                    .pending
+                    .into_iter()
+                    .map(|(snapshot_id, account_id, old_ref, store)| {
+                        (snapshot_id, (account_id, old_ref, store))
+                    })
+                    .collect();
+                index.next_snapshot_id = state.next_snapshot_id.max(
+                    index
+                        .pending_store_by_snapshot_id
+                        .keys()
+                        .map(|snapshot_id| snapshot_id.0.saturating_add(1))
+                        .max()
+                        .unwrap_or(0),
+                );
             }
             Err(err) => log::warn!("Failed to load green account store snapshots: {}", err),
         }
@@ -69,6 +95,25 @@ impl AccountIndex {
         self.by_account_id
             .get(&account_id)
             .map(|account| account.store.root())
+    }
+
+    pub fn account_status(&self, account_id: AccountId, output_ref: OutputRef) -> AccountStatus {
+        AccountStatus {
+            current: self
+                .by_account_id
+                .get(&account_id)
+                .is_some_and(|account| account.utxo.reference() == output_ref),
+            persisted: self
+                .persisted_by_output_ref
+                .get(&output_ref)
+                .is_some_and(|(persisted_id, _)| *persisted_id == account_id),
+            pending: self.pending_by_account_id.contains(&account_id),
+            unbound: self.unbound_by_output_ref.contains_key(&output_ref),
+            predicted: self
+                .predicted_by_output_ref
+                .get(&output_ref)
+                .is_some_and(|(predicted_id, _)| *predicted_id == account_id),
+        }
     }
 
     pub fn pending_snapshot(&self, snapshot_id: StoreSnapshotId) -> Option<&AccountStore> {
@@ -184,6 +229,7 @@ impl AccountIndex {
         self.next_snapshot_id += 1;
         self.pending_store_by_snapshot_id
             .insert(snapshot_id, (account_id, old_ref, predicted_store));
+        self.persist_account_stores();
         snapshot_id
     }
 
@@ -197,6 +243,7 @@ impl AccountIndex {
         }
         self.pending_snapshot_by_output_ref
             .insert(predicted_output_ref, snapshot_id);
+        self.persist_account_stores();
         Ok(())
     }
 
@@ -224,6 +271,7 @@ impl AccountIndex {
         }
         self.predicted_by_output_ref.remove(&output_ref);
         self.unbound_by_output_ref.remove(&output_ref);
+        self.persist_account_stores();
     }
 
     pub fn observe_rollback_consumed(&mut self, output_ref: OutputRef) {
@@ -234,6 +282,7 @@ impl AccountIndex {
             .retain(|_, (_, old_ref, _)| *old_ref != output_ref);
         self.pending_snapshot_by_output_ref
             .retain(|_, snapshot_id| self.pending_store_by_snapshot_id.contains_key(snapshot_id));
+        self.persist_account_stores();
     }
 
     pub fn observe_removed_output(&mut self, output_ref: OutputRef) {
@@ -243,6 +292,7 @@ impl AccountIndex {
         }
         self.predicted_by_output_ref.remove(&output_ref);
         self.unbound_by_output_ref.remove(&output_ref);
+        self.persist_account_stores();
     }
 
     pub fn observe_transaction(
@@ -383,6 +433,7 @@ impl AccountIndex {
                 store,
             },
         );
+        self.persist_account_stores();
         Ok(())
     }
 
@@ -397,18 +448,29 @@ impl AccountIndex {
             .filter(|(_, (_, old_ref, store))| {
                 consumed_refs.contains(old_ref) && store.root() == account.state.store_root
             })
-            .map(|(snapshot_id, _)| *snapshot_id)
+            .map(|(snapshot_id, (account_id, old_ref, store))| {
+                (*snapshot_id, *account_id, *old_ref, store.clone())
+            })
             .collect::<Vec<_>>();
-        if matching.len() != 1 {
+        let Some((_, account_id, _, store)) = matching.first().cloned() else {
+            return Err(GreenStorePlanningError::MissingStore);
+        };
+        if matching
+            .iter()
+            .any(|(_, matching_account_id, _, matching_store)| {
+                *matching_account_id != account_id || *matching_store != store
+            })
+        {
             return Err(GreenStorePlanningError::MissingStore);
         }
-        let snapshot_id = matching[0];
-        let (account_id, _, store) = self
-            .pending_store_by_snapshot_id
-            .remove(&snapshot_id)
-            .ok_or(GreenStorePlanningError::MissingStore)?;
+        let matching_snapshot_ids = matching
+            .iter()
+            .map(|(matching_snapshot_id, _, _, _)| *matching_snapshot_id)
+            .collect::<HashSet<_>>();
+        self.pending_store_by_snapshot_id
+            .retain(|pending_snapshot_id, _| !matching_snapshot_ids.contains(pending_snapshot_id));
         self.pending_snapshot_by_output_ref
-            .retain(|_, pending_snapshot_id| *pending_snapshot_id != snapshot_id);
+            .retain(|_, pending_snapshot_id| !matching_snapshot_ids.contains(pending_snapshot_id));
         self.bind_indexed(
             account_id,
             IndexedAccount {
@@ -416,6 +478,7 @@ impl AccountIndex {
                 store,
             },
         );
+        self.persist_account_stores();
         Ok(())
     }
 
@@ -465,6 +528,12 @@ impl AccountIndex {
                             PersistedAccountStore::from_parts(*account_id, *output_ref, store)
                         }),
                 ),
+            self.pending_store_by_snapshot_id
+                .iter()
+                .map(|(snapshot_id, (account_id, old_ref, store))| {
+                    PersistedPendingStore::from_pending(*snapshot_id, *account_id, *old_ref, store)
+                }),
+            self.next_snapshot_id,
         ) {
             log::warn!("Failed to persist green account store snapshots: {}", err);
         }
@@ -482,6 +551,19 @@ struct PersistedAccountStore {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct PersistedAccountStores {
     stores: Vec<PersistedAccountStore>,
+    #[serde(default)]
+    pending: Vec<PersistedPendingStore>,
+    #[serde(default)]
+    next_snapshot_id: u64,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct PersistedPendingStore {
+    snapshot_id: StoreSnapshotId,
+    account_id: AccountId,
+    old_ref: OutputRef,
+    root: [u8; 32],
+    leaves: Vec<StoredIntentLeafSnapshot>,
 }
 
 impl PersistedAccountStore {
@@ -507,34 +589,86 @@ impl PersistedAccountStore {
     }
 }
 
+impl PersistedPendingStore {
+    fn from_pending(
+        snapshot_id: StoreSnapshotId,
+        account_id: AccountId,
+        old_ref: OutputRef,
+        store: &AccountStore,
+    ) -> Self {
+        Self {
+            snapshot_id,
+            account_id,
+            old_ref,
+            root: store.root(),
+            leaves: store.snapshot_leaves(),
+        }
+    }
+
+    fn into_pending(
+        self,
+    ) -> Result<(StoreSnapshotId, AccountId, OutputRef, AccountStore), GreenStorePlanningError> {
+        Ok((
+            self.snapshot_id,
+            self.account_id,
+            self.old_ref,
+            AccountStore::from_snapshot(self.root, self.leaves)?,
+        ))
+    }
+}
+
 struct LoadedAccountStore {
     account_id: AccountId,
     output_ref: OutputRef,
     store: AccountStore,
 }
 
-fn load_persisted_stores(path: &PathBuf) -> Result<Vec<LoadedAccountStore>, String> {
+struct LoadedPersistedState {
+    stores: Vec<LoadedAccountStore>,
+    pending: Vec<(StoreSnapshotId, AccountId, OutputRef, AccountStore)>,
+    next_snapshot_id: u64,
+}
+
+fn load_persisted_stores(path: &PathBuf) -> Result<LoadedPersistedState, String> {
     if !path.exists() {
-        return Ok(Vec::new());
+        return Ok(LoadedPersistedState {
+            stores: Vec::new(),
+            pending: Vec::new(),
+            next_snapshot_id: 0,
+        });
     }
     let raw = std::fs::read(path).map_err(|err| err.to_string())?;
     let persisted: PersistedAccountStores = serde_json::from_slice(&raw).map_err(|err| err.to_string())?;
-    persisted
+    let stores = persisted
         .stores
         .into_iter()
         .map(|store| store.into_store().map_err(|err| format!("{:?}", err)))
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let pending = persisted
+        .pending
+        .into_iter()
+        .map(|store| store.into_pending().map_err(|err| format!("{:?}", err)))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(LoadedPersistedState {
+        stores,
+        pending,
+        next_snapshot_id: persisted.next_snapshot_id,
+    })
 }
 
 fn persist_account_stores(
     path: &PathBuf,
     stores: impl IntoIterator<Item = PersistedAccountStore>,
+    pending: impl IntoIterator<Item = PersistedPendingStore>,
+    next_snapshot_id: u64,
 ) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
     let persisted = PersistedAccountStores {
         stores: stores.into_iter().collect(),
+        pending: pending.into_iter().collect(),
+        next_snapshot_id,
     };
     let raw = serde_json::to_vec_pretty(&persisted).map_err(|err| err.to_string())?;
     std::fs::write(path, raw).map_err(|err| err.to_string())
@@ -558,6 +692,10 @@ mod tests {
 
     fn account_id(byte: u8) -> AccountId {
         AccountId::try_from_slice(&[byte; 32]).unwrap()
+    }
+
+    fn order_id(byte: u8) -> GreenOrderId {
+        GreenOrderId::new(account_id(byte), 0, 42, [byte.saturating_add(1); 32])
     }
 
     fn output_ref(index: u64) -> OutputRef {
@@ -831,6 +969,35 @@ mod tests {
     }
 
     #[test]
+    fn transaction_binds_duplicate_identical_pending_snapshots_from_rebuilds() {
+        let id = account_id(20);
+        let old_ref = output_ref(18);
+        let new_ref = output_ref(19);
+        let mut planned_store = crate::account_store::AccountStore::empty();
+        let remaining = intent(500);
+        planned_store
+            .insert_remaining(remaining.intent_key(), order_id(20), remaining)
+            .unwrap();
+        let root = planned_store.root();
+        let mut index = AccountIndex::default();
+        let first_snapshot = index.reserve_predicted_store_snapshot(id, old_ref, planned_store.clone());
+        let second_snapshot = index.reserve_predicted_store_snapshot(id, old_ref, planned_store);
+
+        index.observe_transaction(
+            [old_ref],
+            [account_utxo_with_root(new_ref, dummy_output(2_000_000), root)],
+        );
+
+        assert!(index.pending_snapshot(first_snapshot).is_none());
+        assert!(index.pending_snapshot(second_snapshot).is_none());
+        assert_eq!(
+            index.current(id).map(|account| account.reference()),
+            Some(new_ref)
+        );
+        assert_eq!(index.pending_continuations().len(), 1);
+    }
+
+    #[test]
     fn transaction_does_not_bind_ambiguous_pending_snapshot() {
         let id_1 = account_id(14);
         let id_2 = account_id(15);
@@ -895,6 +1062,45 @@ mod tests {
     }
 
     #[test]
+    fn account_status_distinguishes_persisted_snapshot_from_current_binding() {
+        let id = account_id(28);
+        let output_ref = output_ref(28);
+        let output = dummy_output(2_000_000);
+        let path = std::env::temp_dir().join(format!(
+            "green-account-store-test-{}-status.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let mut index = AccountIndex::with_persistence_path(path.clone());
+            index.bind_indexed(
+                id,
+                IndexedAccount {
+                    utxo: FinalizedTxOut::new(output.clone(), output_ref),
+                    store: crate::account_store::AccountStore::empty(),
+                },
+            );
+        }
+
+        let mut reloaded = AccountIndex::with_persistence_path(path.clone());
+        let persisted = reloaded.account_status(id, output_ref);
+        assert!(!persisted.current);
+        assert!(persisted.persisted);
+        assert!(!persisted.pending);
+        assert!(!persisted.unbound);
+
+        reloaded.observe_created_or_updated(account_utxo(output_ref, output));
+        let current = reloaded.account_status(id, output_ref);
+        assert!(current.current);
+        assert!(!current.persisted);
+        assert!(!current.pending);
+        assert!(!current.unbound);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn scanner_continuation_uses_canonical_order_id_from_execution_path() {
         let id = account_id(17);
         let old_ref = output_ref(14);
@@ -930,6 +1136,115 @@ mod tests {
 
         assert_eq!(continuations.len(), 1);
         assert_eq!(continuations[0].0.id, canonical_order_id);
+    }
+
+    #[test]
+    fn pending_store_snapshot_survives_restart_and_binds_confirmed_successor() {
+        let id = account_id(29);
+        let old_ref = output_ref(29);
+        let new_ref = output_ref(30);
+        let old_output = dummy_output(2_000_000);
+        let new_output = dummy_output(2_100_000);
+        let canonical_order_id = GreenOrderId::new(id, 0, 42, [29; 32]);
+        let updated_intent = intent(500);
+        let path = std::env::temp_dir().join(format!(
+            "green-account-store-test-{}-pending-restart.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let planned_root = {
+            let mut index = AccountIndex::with_persistence_path(path.clone());
+            index.bind_indexed(
+                id,
+                IndexedAccount {
+                    utxo: FinalizedTxOut::new(old_output, old_ref),
+                    store: crate::account_store::AccountStore::empty(),
+                },
+            );
+            index
+                .plan_sig_insert(
+                    id,
+                    old_ref,
+                    canonical_order_id,
+                    updated_intent.intent_key(),
+                    updated_intent,
+                )
+                .unwrap()
+                .new_root
+        };
+
+        let mut reloaded = AccountIndex::with_persistence_path(path.clone());
+        reloaded.observe_transaction(
+            [old_ref],
+            [account_utxo_with_root(new_ref, new_output, planned_root)],
+        );
+
+        assert_eq!(
+            reloaded.current(id).map(|account| account.reference()),
+            Some(new_ref)
+        );
+        assert_eq!(reloaded.pending_continuations().len(), 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn persisted_non_empty_store_reloads_with_continuation_after_observation() {
+        let id = account_id(30);
+        let old_ref = output_ref(31);
+        let new_ref = output_ref(32);
+        let old_output = dummy_output(2_000_000);
+        let new_output = dummy_output(2_100_000);
+        let canonical_order_id = GreenOrderId::new(id, 0, 42, [30; 32]);
+        let updated_intent = intent(500);
+        let path = std::env::temp_dir().join(format!(
+            "green-account-store-test-{}-persisted-non-empty.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let planned_root = {
+            let mut index = AccountIndex::with_persistence_path(path.clone());
+            index.bind_indexed(
+                id,
+                IndexedAccount {
+                    utxo: FinalizedTxOut::new(old_output, old_ref),
+                    store: crate::account_store::AccountStore::empty(),
+                },
+            );
+            let planned = index
+                .plan_sig_insert(
+                    id,
+                    old_ref,
+                    canonical_order_id,
+                    updated_intent.intent_key(),
+                    updated_intent,
+                )
+                .unwrap();
+            index.observe_transaction(
+                [old_ref],
+                [account_utxo_with_root(
+                    new_ref,
+                    new_output.clone(),
+                    planned.new_root,
+                )],
+            );
+            planned.new_root
+        };
+
+        let mut reloaded = AccountIndex::with_persistence_path(path.clone());
+        assert_eq!(reloaded.current(id), None);
+
+        reloaded.observe_created_or_updated(account_utxo_with_root(new_ref, new_output, planned_root));
+
+        assert_eq!(
+            reloaded.current(id).map(|account| account.reference()),
+            Some(new_ref)
+        );
+        let continuations = reloaded.pending_continuations();
+        assert_eq!(continuations.len(), 1);
+        assert_eq!(continuations[0].0.id, canonical_order_id);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

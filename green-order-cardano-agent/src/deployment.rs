@@ -1,8 +1,8 @@
 use bloom_offchain_cardano::orders::green::{ALEPH_ACCOUNT_VALIDATOR, ALEPH_BATCH_WITNESS_VALIDATOR};
 use cardano_explorer::CardanoNetwork;
+use cml_chain::builders::tx_builder::TransactionUnspentOutput;
 use spectrum_cardano_lib::ex_units::ExUnits;
 use spectrum_offchain::domain::Has;
-use cml_chain::builders::tx_builder::TransactionUnspentOutput;
 use spectrum_offchain_cardano::deployment::{
     DeployedScriptInfo, DeployedValidator, DeployedValidatorRef, DeployedValidators, ProtocolDeployment,
     ProtocolScriptHashes, ProtocolValidator,
@@ -116,10 +116,7 @@ fn green_protocol_deployment_from_refs(
             refs.royalty_pool_withdraw_contract_ledger_fixed,
             &script_anchor,
         ),
-        royalty_pool_withdraw_v2: materialize_ref(
-            refs.royalty_pool_withdraw_contract_v2,
-            &script_anchor,
-        ),
+        royalty_pool_withdraw_v2: materialize_ref(refs.royalty_pool_withdraw_contract_v2, &script_anchor),
     }
 }
 
@@ -131,9 +128,7 @@ fn materialize_ref<const TYP: u8>(
         reference_utxo: script_anchor.clone(),
         hash: reference.hash,
         cost: reference.cost,
-        marginal_cost: reference
-            .marginal_cost
-            .unwrap_or(ExUnits { mem: 0, steps: 0 }),
+        marginal_cost: reference.marginal_cost.unwrap_or(ExUnits { mem: 0, steps: 0 }),
     }
 }
 

@@ -21,10 +21,23 @@ pub async fn run_continuation_scanner(
             let index = account_index.lock().expect("account index lock poisoned");
             index.pending_continuations()
         };
+        if !continuations.is_empty() {
+            log::info!(
+                "Green continuation scanner found {} pending continuation(s)",
+                continuations.len()
+            );
+        }
         for continuation in continuations {
             let event = admitted_intent_to_event(continuation);
             let pair = event.0;
-            let _ = events.get_mut(pair).send(event).await;
+            log::info!("Emitting green continuation intent for pair {:?}", pair);
+            if let Err(err) = events.get_mut(pair).send(event).await {
+                log::warn!(
+                    "Failed to emit green continuation intent for pair {:?}: {}",
+                    pair,
+                    err
+                );
+            }
         }
     }
 }

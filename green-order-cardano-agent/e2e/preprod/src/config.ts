@@ -32,6 +32,10 @@ export type PreprodE2eConfig = {
   smokeLeavingLovelace: bigint;
   smokeExpectedTokenAmount: bigint;
   smokeFeeLovelace: bigint;
+  partialLeavingLovelace: bigint;
+  partialExpectedTokenAmount: bigint;
+  partialFeeLovelace: bigint;
+  partialExecutionTimeoutMs: number;
   deployment: Deployment;
 };
 
@@ -72,6 +76,10 @@ export async function loadConfig(): Promise<PreprodE2eConfig> {
     smokeLeavingLovelace: bigintEnv("SMOKE_LEAVING_LOVELACE", 1_000_000n),
     smokeExpectedTokenAmount: bigintEnv("SMOKE_EXPECTED_TOKEN_AMOUNT", 1n),
     smokeFeeLovelace: bigintEnv("SMOKE_FEE_LOVELACE", 2_000_000n),
+    partialLeavingLovelace: bigintEnv("PARTIAL_LEAVING_LOVELACE", 20_000_000n),
+    partialExpectedTokenAmount: bigintEnv("PARTIAL_EXPECTED_TOKEN_AMOUNT", 15_000_000n),
+    partialFeeLovelace: bigintEnv("PARTIAL_FEE_LOVELACE", 2_000_000n),
+    partialExecutionTimeoutMs: numberEnv("PARTIAL_EXECUTION_TIMEOUT_MS", 900_000),
     deployment,
   };
 }
@@ -163,4 +171,13 @@ function bigintEnv(name: string, fallback: bigint): bigint {
   if (!value) return fallback;
   if (!/^[0-9]+$/.test(value)) throw new Error(`${name} must be a decimal integer`);
   return BigInt(value);
+}
+
+function numberEnv(name: string, fallback: number): number {
+  const value = optionalEnv(name);
+  if (!value) return fallback;
+  if (!/^[0-9]+$/.test(value)) throw new Error(`${name} must be a decimal integer`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new Error(`${name} must be a safe integer`);
+  return parsed;
 }

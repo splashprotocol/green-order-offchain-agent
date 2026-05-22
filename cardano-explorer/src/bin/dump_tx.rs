@@ -44,8 +44,7 @@ fn main() {
     if let Some(redeemers) = &tx.witness_set.redeemers {
         match redeemers {
             Redeemers::ArrLegacyRedeemer {
-                arr_legacy_redeemer,
-                ..
+                arr_legacy_redeemer, ..
             } => {
                 for redeemer in arr_legacy_redeemer {
                     println!(

@@ -224,9 +224,15 @@ impl AccountStore {
         if leaf.status != StoredIntentStatus::Pending {
             return Err(GreenStorePlanningError::MissingPendingIntent);
         }
-        Ok(mpf::proof_to_cbor(
-            &trie_from_leaves(&self.leaves).proof_for_present(key)?,
-        ))
+        let trie = trie_from_leaves(&self.leaves);
+        let proof = trie.proof_for_present(key)?;
+        if !mpf::has(self.root, key, &leaf.digest, &proof) {
+            return Err(GreenStorePlanningError::RootMismatch {
+                expected: trie.root(),
+                actual: self.root,
+            });
+        }
+        Ok(mpf::proof_to_cbor(&proof))
     }
 }
 
@@ -265,7 +271,9 @@ fn trie_from_leaves(leaves: &BTreeMap<Vec<u8>, StoredIntentLeaf>) -> mpf::Trie {
 #[cfg(test)]
 mod tests {
     use bloom_offchain_cardano::orders::green::{AccountId, AlephAccountAbi, AlephIntention, GreenOrderId};
-    use spectrum_cardano_lib::AssetClass;
+    use cml_chain::assets::AssetName;
+    use cml_chain::PolicyId;
+    use spectrum_cardano_lib::{AssetClass, Token};
 
     use super::{AccountStore, StoredIntentStatus, ALEPH_MPF_EMPTY_ROOT};
 
@@ -363,6 +371,23 @@ mod tests {
     }
 
     #[test]
+    fn path_proof_rejects_inconsistent_root() {
+        let mut store = AccountStore::empty();
+        let key = vec![1, 2, 3];
+        store
+            .insert_remaining(key.clone(), order_id(7), intent(1_000))
+            .unwrap();
+        store.root = [9; 32];
+
+        let err = store.path_proof(&key).unwrap_err();
+
+        assert!(matches!(
+            err,
+            bloom_offchain_cardano::orders::green::GreenStorePlanningError::RootMismatch { .. }
+        ));
+    }
+
+    #[test]
     fn path_full_fill_preserves_root_but_marks_leaf_completed() {
         let mut store = AccountStore::empty();
         let key = vec![1, 2, 3];
@@ -398,6 +423,65 @@ mod tests {
         assert_ne!(second_delta.new_root, singleton_root);
         assert!(store.pending_leaf(&first_key).is_none());
         assert!(store.pending_leaf(&second_key).is_some());
+    }
+
+    #[test]
+    fn completes_pending_leaf_with_completed_neighbor() {
+        let mut store = AccountStore::empty();
+        let first_key = vec![1, 2, 3];
+        let second_key = vec![4, 5, 6];
+        let first = intent(1_000);
+        let first_digest = first.digest();
+        store
+            .insert_remaining(first_key.clone(), order_id(4), first)
+            .unwrap();
+        store.mark_completed(first_key, first_digest).unwrap();
+        let second = intent(2_000);
+        let second_digest = second.digest();
+        store
+            .insert_remaining(second_key.clone(), order_id(5), second)
+            .unwrap();
+        let root = store.root();
+
+        store.mark_completed(second_key.clone(), second_digest).unwrap();
+
+        assert_eq!(store.root(), root);
+        assert!(store.pending_leaf(&second_key).is_none());
+    }
+
+    #[test]
+    fn completes_live_preprod_partial_residual_leaf() {
+        let mut store = AccountStore::empty();
+        let residual = AlephIntention {
+            abi: AlephAccountAbi::Current,
+            target_nonce_index: 0,
+            target_nonce_value: 1,
+            leaving_asset: AssetClass::Native,
+            leaving_amount: 6_787_028,
+            arriving_asset: AssetClass::Token(Token(
+                PolicyId::from_hex("aaf945ecdbe9256312f8d90bdd7cd904f558e9be2cf7aa92c4c2bf19").unwrap(),
+                AssetName::new(hex::decode("677265656e4f09df102858745a").unwrap())
+                    .unwrap()
+                    .into(),
+            )),
+            expected_arriving_amount: 5_090_271,
+            fee_lovelace: 678_702,
+            operator: hex::decode("cd52b4976906bfe539d5c8cc6d8101f3648c924bd58f3ffed43f46e9")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        };
+        let key = residual.intent_key();
+        let digest = residual.digest();
+        store
+            .insert_remaining(key.clone(), order_id(25), residual)
+            .unwrap();
+        let root = store.root();
+
+        store.mark_completed(key.clone(), digest).unwrap();
+
+        assert_eq!(store.root(), root);
+        assert!(store.pending_leaf(&key).is_none());
     }
 
     #[test]

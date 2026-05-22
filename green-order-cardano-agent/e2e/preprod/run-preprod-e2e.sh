@@ -52,4 +52,5 @@ else
   deno run --no-lock --allow-net --allow-read --allow-write --allow-env 08-create-separator-funding.ts
 fi
 
-deno run --no-lock --allow-net --allow-read --allow-write --allow-env 04-submit-green-order-smoke.ts
+smoke_script="${E2E_SMOKE_SCRIPT:-04-submit-green-order-smoke.ts}"
+deno run --no-lock --allow-net --allow-read --allow-write --allow-env --allow-run "${smoke_script}"

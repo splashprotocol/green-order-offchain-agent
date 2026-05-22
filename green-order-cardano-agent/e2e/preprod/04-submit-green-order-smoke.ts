@@ -1,9 +1,10 @@
 import { credentialToAddress } from "npm:@lucid-evolution/utils@0.1.65";
-import { Constr, Data } from "npm:@lucid-evolution/lucid@0.3.53";
 import { parseAgentAcceptedResponse, submitIntent } from "./src/agent.ts";
 import { deriveCompressedPublicKey, signIntentDigest } from "./src/aleph.ts";
+import { parseAccountDatum } from "./src/account_datum.ts";
 import { loadConfig } from "./src/config.ts";
 import { adaAsset, alephIntentionDigest, buildIntentPayload, nativeAsset } from "./src/intent.ts";
+import { koiosUtxoByRef, koiosUtxosAt, SimpleUtxo } from "./src/koios.ts";
 import { loadState, saveState } from "./src/state.ts";
 import { waitFor } from "./src/wait.ts";
 
@@ -116,58 +117,6 @@ await saveState(config.statePath, {
 });
 console.log("Submitted green order smoke intent");
 
-type SimpleUtxo = {
-  txHash: string;
-  outputIndex: number;
-  datum?: string | null;
-  assets: Record<string, bigint>;
-};
-
-type OutputRef = { txHash: string; outputIndex: number };
-
-async function koiosUtxoByRef(ref: OutputRef): Promise<SimpleUtxo | undefined> {
-  const rows = await koiosPost("utxo_info", {
-    _utxo_refs: [`${ref.txHash}#${ref.outputIndex}`],
-    _extended: true,
-  });
-  return rows.map(parseKoiosUtxo)[0];
-}
-
-async function koiosUtxosAt(address: string): Promise<SimpleUtxo[]> {
-  const rows = await koiosPost("address_utxos", {
-    _addresses: [address],
-    _extended: true,
-  });
-  return rows.map(parseKoiosUtxo);
-}
-
-async function koiosPost(endpoint: string, body: unknown): Promise<any[]> {
-  const baseUrl = Deno.env.get("KOIOS_PREPROD_URL")?.trim() ?? "https://preprod.koios.rest/api/v1";
-  const response = await fetch(`${baseUrl}/${endpoint}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    throw new Error(`Koios ${endpoint} failed ${response.status}: ${await response.text()}`);
-  }
-  return await response.json();
-}
-
-function parseKoiosUtxo(row: any): SimpleUtxo {
-  const assets: Record<string, bigint> = { lovelace: BigInt(row.value) };
-  for (const asset of row.asset_list ?? []) {
-    const unit = `${asset.policy_id}${asset.asset_name ?? ""}`;
-    assets[unit] = BigInt(asset.quantity);
-  }
-  return {
-    txHash: row.tx_hash,
-    outputIndex: Number(row.tx_index),
-    datum: row.inline_datum?.bytes ?? null,
-    assets,
-  };
-}
-
 function assertAccountAdvanced(
   oldAccount: { assets: Record<string, bigint> },
   newAccount: { datum?: string | null; assets: Record<string, bigint> },
@@ -196,34 +145,6 @@ function assertAccountAdvanced(
   if (receivedDelta < expectedAmount) {
     throw new Error("successor account did not receive expected output asset");
   }
-}
-
-function parseAccountDatum(
-  datumCbor: string,
-  alephAbi: "current" | "legacy",
-): { nonce0: bigint; mainKeyHex: string } {
-  const datum = Data.from(datumCbor) as any;
-  if (alephAbi === "legacy") {
-    if (!(datum instanceof Constr) || datum.index !== 0 || datum.fields.length !== 4) {
-      throw new Error("successor legacy account datum has unexpected shape");
-    }
-    if (typeof datum.fields[1] !== "bigint" || typeof datum.fields[2] !== "string") {
-      throw new Error("successor legacy account nonce or main_key is malformed");
-    }
-    return { nonce0: datum.fields[1], mainKeyHex: datum.fields[2] };
-  }
-  if (!(datum instanceof Constr) || datum.index !== 0 || datum.fields.length !== 6) {
-    throw new Error("successor account datum has unexpected shape");
-  }
-  const nonce = datum.fields[2];
-  if (!Array.isArray(nonce) || typeof nonce[0] !== "bigint") {
-    throw new Error("successor account nonce[0] is missing or malformed");
-  }
-  const hotCred = datum.fields[3];
-  if (!Array.isArray(hotCred) || typeof hotCred[0] !== "string") {
-    throw new Error("successor account main_key is missing or malformed");
-  }
-  return { nonce0: nonce[0], mainKeyHex: hotCred[0] };
 }
 
 function assertPoolAdvanced(

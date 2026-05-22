@@ -141,6 +141,10 @@ impl TxBlueprint {
         }
     }
 
+    pub fn forces_operator_funding_input(&self) -> bool {
+        self.aleph_batch_witness.is_some()
+    }
+
     fn cmp_script_refs(&self, lh: &OutputRef, rh: &OutputRef) -> Ordering {
         lh.cmp(rh)
     }
@@ -152,6 +156,7 @@ impl TxBlueprint {
         operator_address: OperatorRewardAddress,
         operator_funding: FinalizedTxOut,
         operator_interest: u64,
+        operator_funding_fee_reserve: u64,
     ) -> (TransactionBuilder, FundingIO<FinalizedTxOut, TransactionOutput>) {
         let TxBlueprint {
             script_io,
@@ -176,7 +181,17 @@ impl TxBlueprint {
                     FundingIO::NotUsed(operator_funding)
                 }
             } else if force_operator_funding_input {
-                let operator_output = operator_funding.0.clone();
+                let mut operator_output = operator_funding.0.clone();
+                if operator_funding_fee_reserve > 0 {
+                    operator_output
+                        .value_mut()
+                        .sub_unsafe(AssetClass::Native, operator_funding_fee_reserve);
+                }
+                if operator_interest < MIN_SAFE_LOVELACE_VALUE {
+                    operator_output
+                        .value_mut()
+                        .add_unsafe(AssetClass::Native, operator_interest);
+                }
                 all_io.push(Either::Right((
                     Some(operator_funding.clone()),
                     operator_output.clone(),
@@ -204,7 +219,12 @@ impl TxBlueprint {
                 FundingIO::Replaced(operator_funding, operator_output)
             }
         } else if force_operator_funding_input {
-            let operator_output = operator_funding.0.clone();
+            let mut operator_output = operator_funding.0.clone();
+            if operator_funding_fee_reserve > 0 {
+                operator_output
+                    .value_mut()
+                    .sub_unsafe(AssetClass::Native, operator_funding_fee_reserve);
+            }
             all_io.push(Either::Right((
                 Some(operator_funding.clone()),
                 operator_output.clone(),
@@ -573,6 +593,7 @@ mod test {
     use spectrum_cardano_lib::output::FinalizedTxOut;
     use spectrum_cardano_lib::protocol_params::constant_tx_builder;
     use spectrum_cardano_lib::transaction::TransactionOutputExtension;
+    use spectrum_cardano_lib::value::ValueExtension;
     use spectrum_cardano_lib::OutputRef;
     use spectrum_offchain_cardano::creds::OperatorRewardAddress;
     use spectrum_offchain_cardano::deployment::DeployedValidatorErased;
@@ -616,6 +637,7 @@ mod test {
             spectrum_cardano_lib::NetworkId::PREPROD,
             operator_address,
             operator_funding,
+            0,
             0,
         );
         let redeemers = tx_builder
@@ -698,6 +720,7 @@ mod test {
             operator_address,
             operator_funding,
             2_000_000,
+            spectrum_offchain_cardano::constants::MIN_SAFE_LOVELACE_VALUE,
         );
 
         assert!(matches!(funding_io, FundingIO::Replaced(_, _)));
@@ -756,6 +779,7 @@ mod test {
             operator_address,
             operator_funding,
             0,
+            spectrum_offchain_cardano::constants::MIN_SAFE_LOVELACE_VALUE,
         );
 
         assert!(matches!(funding_io, FundingIO::Replaced(_, _)));
@@ -786,6 +810,12 @@ mod test {
         assert_eq!(
             super::key_payment_output(3_000_000).address(),
             outputs[1].address()
+        );
+        assert_eq!(
+            Some(3_000_000 - spectrum_offchain_cardano::constants::MIN_SAFE_LOVELACE_VALUE),
+            outputs[1]
+                .value()
+                .amount_of(spectrum_cardano_lib::AssetClass::Native)
         );
         assert_ne!(
             super::key_payment_output(3_000_000).address(),
@@ -852,19 +882,110 @@ mod test {
             operator_address,
             operator_funding,
             2_000_000,
+            spectrum_offchain_cardano::constants::MIN_SAFE_LOVELACE_VALUE,
         );
 
         let FundingIO::Replaced(_, funding_barrier_output) = funding_io else {
             panic!("expected funding replacement");
         };
-        assert_eq!(funding_output.value(), funding_barrier_output.value());
+        assert_eq!(
+            Some(3_000_000 - spectrum_offchain_cardano::constants::MIN_SAFE_LOVELACE_VALUE),
+            funding_barrier_output
+                .value()
+                .amount_of(spectrum_cardano_lib::AssetClass::Native)
+        );
 
         let outputs = tx_builder.get_outputs();
         assert_eq!(4, outputs.len());
         assert_eq!(funding_output.address(), outputs[1].address());
-        assert_eq!(funding_output.value(), outputs[1].value());
+        assert_eq!(
+            Some(3_000_000 - spectrum_offchain_cardano::constants::MIN_SAFE_LOVELACE_VALUE),
+            outputs[1]
+                .value()
+                .amount_of(spectrum_cardano_lib::AssetClass::Native)
+        );
         assert_eq!(reward_output.address(), outputs[3].address());
         assert_eq!(&Value::from(2_000_000), outputs[3].value());
+    }
+
+    #[test]
+    fn aleph_batch_folds_small_operator_reward_into_forced_funding_output() {
+        let mut blueprint = super::TxBlueprint::new();
+        let account_ref = OutputRef::new(TransactionHash::from([0x10; 32]), 0);
+        let funding_ref = OutputRef::new(TransactionHash::from([0x20; 32]), 0);
+
+        blueprint.add_script_ref_with_cost_for_test(account_ref, true, ExUnits { mem: 0, steps: 0 });
+
+        let witness_script = cml_chain::plutus::PlutusV2Script::new(vec![0x42]);
+        let witness = DeployedValidatorErased {
+            reference_utxo: cml_chain::builders::tx_builder::TransactionUnspentOutput::new(
+                OutputRef::new(TransactionHash::from([0xf0; 32]), 0).into(),
+                TransactionOutput::new(
+                    super::test_output().address().clone(),
+                    Value::from(2_000_000),
+                    None,
+                    Some(cml_chain::Script::new_plutus_v2(witness_script.clone())),
+                ),
+            ),
+            hash: witness_script.hash(),
+            ex_budget: ExUnits { mem: 0, steps: 0 },
+            marginal_cost: ExUnits { mem: 0, steps: 0 },
+        };
+        blueprint.add_aleph_batch_intention(
+            witness,
+            account_ref,
+            crate::orders::green::AlephAuthorizedIntention {
+                intent: crate::orders::green::AlephIntention {
+                    abi: crate::orders::green::AlephAccountAbi::Current,
+                    target_nonce_index: 0,
+                    target_nonce_value: 1,
+                    leaving_asset: spectrum_cardano_lib::AssetClass::Native,
+                    leaving_amount: 0,
+                    arriving_asset: spectrum_cardano_lib::AssetClass::Native,
+                    expected_arriving_amount: 0,
+                    fee_lovelace: 0,
+                    operator: [0; 28],
+                },
+                remainder: 0,
+                auth: crate::orders::green::GreenAuth::new_sig(vec![], vec![], vec![0; 64], vec![]).unwrap(),
+            },
+        );
+
+        let operator_interest = 678_702;
+        let funding_output = super::key_payment_output(3_000_000);
+        let operator_funding = FinalizedTxOut(funding_output.clone(), funding_ref);
+        let operator_address = OperatorRewardAddress(super::test_output().address().clone());
+        let (tx_builder, funding_io) = blueprint.project_onto_builder(
+            constant_tx_builder(),
+            spectrum_cardano_lib::NetworkId::PREPROD,
+            operator_address,
+            operator_funding,
+            operator_interest,
+            spectrum_offchain_cardano::constants::MIN_SAFE_LOVELACE_VALUE,
+        );
+
+        let FundingIO::Replaced(_, funding_barrier_output) = funding_io else {
+            panic!("expected funding replacement");
+        };
+        assert_eq!(
+            Some(
+                3_000_000 - spectrum_offchain_cardano::constants::MIN_SAFE_LOVELACE_VALUE + operator_interest
+            ),
+            funding_barrier_output
+                .value()
+                .amount_of(spectrum_cardano_lib::AssetClass::Native)
+        );
+
+        let outputs = tx_builder.get_outputs();
+        assert_eq!(2, outputs.len());
+        assert_eq!(
+            Some(
+                3_000_000 - spectrum_offchain_cardano::constants::MIN_SAFE_LOVELACE_VALUE + operator_interest
+            ),
+            outputs[1]
+                .value()
+                .amount_of(spectrum_cardano_lib::AssetClass::Native)
+        );
     }
 
     #[test]
@@ -917,6 +1038,7 @@ mod test {
             OperatorRewardAddress(super::test_output().address().clone()),
             FinalizedTxOut(super::key_payment_output(3_000_000), funding_ref),
             0,
+            0,
         );
         let draft_body = tx_builder
             .build_for_evaluation(
@@ -928,7 +1050,9 @@ mod test {
 
         assert_eq!(
             Some(vec![operator]),
-            draft_body.required_signers.map(|signers| signers.into_iter().collect())
+            draft_body
+                .required_signers
+                .map(|signers| signers.into_iter().collect())
         );
     }
 

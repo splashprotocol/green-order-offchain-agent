@@ -39,7 +39,7 @@ use crate::execution_engine::execution_state::{ExecutionState, ScriptInputBluepr
 use crate::orders::adhoc::{AdhocFeeStructure, AdhocOrder};
 use crate::orders::green::{
     apply_full_fill_to_account_output, AlephAccountAction, AlephAccountUtxo, AlephAuthorizedIntention,
-    GreenAccountLookup, GreenAuth, GreenIntention, GreenOrder, GreenPartialPolicy, GreenStorePlanner,
+    GreenAccountLookup, GreenAuth, GreenOrder, GreenPartialPolicy, GreenStorePlanner,
     ALEPH_ACCOUNT_VALIDATOR, ALEPH_BATCH_WITNESS_VALIDATOR,
 };
 use crate::orders::grid::GridOrder;
@@ -593,7 +593,6 @@ where
         let intent_key = aleph_intention.intent_key();
         let intent_digest = aleph_intention.digest();
         let mut authorized_auth = ord.auth.clone();
-        let mut next_order = None;
 
         if leaving_remainder > 0 {
             let updated_intent = aleph_intention
@@ -622,7 +621,6 @@ where
                         signature: signature.clone(),
                         update_proof: planned.proof.clone(),
                     };
-                    next_order = Some(continuation_order(&ord, updated_intent, planned.proof));
                 }
                 GreenAuth::Path { .. } => {
                     let planned = context
@@ -638,7 +636,6 @@ where
                     authorized_auth = GreenAuth::Path {
                         proof: planned.proof.clone(),
                     };
-                    next_order = Some(continuation_order(&ord, updated_intent, planned.proof));
                 }
             }
         } else if matches!(ord.auth, GreenAuth::Path { .. }) {
@@ -696,37 +693,14 @@ where
             .tx_blueprint
             .add_aleph_batch_intention(batch_witness, account.output_ref, authorized);
 
-        let effect = if let Some(next_order) = next_order {
-            ExecutionEff::Updated(consumed_bundle, Bundled(next_order, account_output))
-        } else {
-            ExecutionEff::Eliminated(consumed_bundle)
-        };
+        // Green continuations depend on store snapshots that become durable
+        // only after the produced Aleph account output is observed. Do not
+        // re-advertise a partial continuation through the local liquidity book
+        // before confirmation; the account-index scanner will emit it after
+        // the updated account output is bound.
+        let effect = ExecutionEff::Eliminated(consumed_bundle);
 
         (state, effect, context)
-    }
-}
-
-fn continuation_order(
-    original: &GreenOrder,
-    intent: crate::orders::green::AlephIntention,
-    proof: Vec<u8>,
-) -> GreenOrder {
-    GreenOrder {
-        id: original.id,
-        account_id: original.account_id,
-        intention: GreenIntention {
-            input_asset: intent.leaving_asset,
-            output_asset: intent.arriving_asset,
-            leaving_amount: intent.leaving_amount,
-            expected_arriving_amount: intent.expected_arriving_amount,
-            fee_lovelace: intent.fee_lovelace,
-            target_nonce_slot: intent.target_nonce_index,
-            target_nonce_value: intent.target_nonce_value,
-            operator_key_hash: intent.operator,
-        },
-        accumulated_output: 0,
-        current_remainder: intent.leaving_amount,
-        auth: GreenAuth::Path { proof },
     }
 }
 

@@ -1,8 +1,9 @@
 use std::sync::{Arc, Mutex};
 
+use axum::extract::Query;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use cml_crypto::RawBytesEncoding;
 use futures::channel::mpsc;
@@ -42,6 +43,7 @@ where
     Router::new()
         .route("/intents", post(post_intent::<C>))
         .route("/accounts/bind", post(post_bind_account::<C>))
+        .route("/accounts/status", get(get_account_status::<C>))
         .with_state(state)
 }
 
@@ -58,6 +60,14 @@ pub(crate) struct BindAccountRequest {
 pub struct BindAccountResponse {
     pub status: &'static str,
     pub reason: Option<&'static str>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AccountStatusQuery {
+    account_id: String,
+    tx_hash: String,
+    output_index: u64,
 }
 
 async fn post_intent<C>(
@@ -132,16 +142,51 @@ where
     }
 }
 
+async fn get_account_status<C>(
+    State(state): State<HttpIntentState<C>>,
+    Query(req): Query<AccountStatusQuery>,
+) -> (StatusCode, Json<serde_json::Value>)
+where
+    C: Has<DeployedScriptInfo<{ ALEPH_ACCOUNT_VALIDATOR }>> + Clone + Send + Sync + 'static,
+{
+    let Ok((account_id, output_ref)) = parse_account_status_query(req) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"status": "rejected", "reason": "malformedStatusQuery"})),
+        );
+    };
+    let status = state
+        .account_index
+        .lock()
+        .expect("account index lock poisoned")
+        .account_status(account_id, output_ref);
+    (StatusCode::OK, Json(serde_json::json!({"status": status})))
+}
+
+fn parse_account_status_query(
+    req: AccountStatusQuery,
+) -> Result<(AccountId, spectrum_cardano_lib::OutputRef), ()> {
+    parse_account_ref(req.account_id, req.tx_hash, req.output_index)
+}
+
 fn parse_bind_account_request(
     req: BindAccountRequest,
 ) -> Result<(AccountId, spectrum_cardano_lib::OutputRef), ()> {
-    let account_id_bytes = hex::decode(req.account_id).map_err(|_| ())?;
+    parse_account_ref(req.account_id, req.tx_hash, req.output_index)
+}
+
+fn parse_account_ref(
+    account_id: String,
+    tx_hash: String,
+    output_index: u64,
+) -> Result<(AccountId, spectrum_cardano_lib::OutputRef), ()> {
+    let account_id_bytes = hex::decode(account_id).map_err(|_| ())?;
     let account_id = AccountId::try_from_slice(&account_id_bytes).map_err(|_| ())?;
-    let tx_hash_bytes = hex::decode(req.tx_hash).map_err(|_| ())?;
+    let tx_hash_bytes = hex::decode(tx_hash).map_err(|_| ())?;
     let tx_hash = cml_crypto::TransactionHash::from_raw_bytes(&tx_hash_bytes).map_err(|_| ())?;
     Ok((
         account_id,
-        spectrum_cardano_lib::OutputRef::new(tx_hash, req.output_index),
+        spectrum_cardano_lib::OutputRef::new(tx_hash, output_index),
     ))
 }
 

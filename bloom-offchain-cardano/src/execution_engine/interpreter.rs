@@ -142,7 +142,7 @@ where
         ctx: Ctx,
     ) -> ExecutionResult<T, M, OutputRef, FinalizedTxOut, SignedTxBuilder> {
         let (tx_builder, effects, funding_io_preview, ctx) =
-            execute_recipe(funding, self.take_residual_fee, ctx, instructions, 0, 0, 0)
+            execute_recipe(funding, self.take_residual_fee, ctx, instructions, 0, 0, 0, 0)
                 .unwrap_or_else(|err| panic!("fee correction failed: {}", err));
 
         let mut order_of_execution = vec![];
@@ -178,11 +178,19 @@ where
                 .collect::<Vec<_>>()
                 .join(","),
             tx_outputs.len(),
-            tx_body.withdrawals.as_ref().map(|withdrawals| withdrawals.len()).unwrap_or(0),
+            tx_body
+                .withdrawals
+                .as_ref()
+                .map(|withdrawals| withdrawals.len())
+                .unwrap_or(0),
             tx_body
                 .required_signers
                 .as_ref()
-                .map(|signers| signers.iter().map(|signer| signer.to_hex()).collect::<Vec<_>>().join(","))
+                .map(|signers| signers
+                    .iter()
+                    .map(|signer| signer.to_hex())
+                    .collect::<Vec<_>>()
+                    .join(","))
                 .unwrap_or_default(),
         );
 
@@ -270,6 +278,7 @@ fn execute_recipe<Tk, Mk, Ctx>(
     instructions: Vec<Execution<Tk, Mk, FinalizedTxOut>>,
     accumulated_residue: Lovelace,
     operator_fee_paid_from_interest: Lovelace,
+    operator_funding_fee_reserve: Lovelace,
     attempt: u8,
 ) -> Result<
     (
@@ -289,8 +298,8 @@ where
 {
     let state = ExecutionState::new();
     debug!(
-        "fee correction attempt {}: take_residual_fee={}, accumulated_residue={}, operator_fee_paid_from_interest={}",
-        attempt, take_residual_fee, accumulated_residue, operator_fee_paid_from_interest
+        "fee correction attempt {}: take_residual_fee={}, accumulated_residue={}, operator_fee_paid_from_interest={}, operator_funding_fee_reserve={}",
+        attempt, take_residual_fee, accumulated_residue, operator_fee_paid_from_interest, operator_funding_fee_reserve
     );
     let (
         ExecutionState {
@@ -302,6 +311,7 @@ where
         ctx,
     ) = execute(ctx, state, Vec::new(), instructions.clone());
     trace!("Going to interpret blueprint: {}", tx_blueprint);
+    let force_operator_funding_input = tx_blueprint.forces_operator_funding_input();
     let gross_operator_interest = operator_interest + accumulated_residue;
     let projected_operator_interest = operator_payout_after_network_fee(
         reserved_tx_fee,
@@ -314,6 +324,7 @@ where
         ctx.select::<OperatorRewardAddress>(),
         funding.clone(),
         projected_operator_interest,
+        operator_funding_fee_reserve,
     );
     tx_builder
         .add_collateral(ctx.select::<Collateral>().into())
@@ -362,6 +373,30 @@ where
             instructions,
             accumulated_residue,
             expected_operator_fee_paid,
+            operator_funding_fee_reserve,
+            attempt + 1,
+        );
+    }
+    let desired_operator_funding_fee_reserve = if force_operator_funding_input {
+        estimated_fee
+            .saturating_sub(updated_tx_fee)
+            .saturating_sub(operator_fee_paid_from_interest)
+    } else {
+        0
+    };
+    if desired_operator_funding_fee_reserve != operator_funding_fee_reserve {
+        debug!(
+            "fee correction attempt {} rebuilding with operator funding fee reserve: {} -> {}",
+            attempt, operator_funding_fee_reserve, desired_operator_funding_fee_reserve
+        );
+        return execute_recipe(
+            funding,
+            take_residual_fee,
+            ctx,
+            instructions,
+            accumulated_residue,
+            operator_fee_paid_from_interest,
+            desired_operator_funding_fee_reserve,
             attempt + 1,
         );
     }
@@ -407,6 +442,7 @@ where
                 instructions,
                 updated_accumulated_residue,
                 operator_fee_paid_from_interest,
+                operator_funding_fee_reserve,
                 attempt + 1,
             )
         }
@@ -445,6 +481,7 @@ where
                     instructions,
                     accumulated_residue,
                     operator_fee_paid_from_interest,
+                    operator_funding_fee_reserve,
                     attempt + 1,
                 )
             }
@@ -1018,6 +1055,7 @@ mod tests {
             ctx.operator_reward.clone(),
             FinalizedTxOut(funding_bearer.clone(), funding_ref),
             operator_interest,
+            0,
         );
         builder_without_residue
             .add_collateral(ctx.collateral.clone().into())
@@ -1034,6 +1072,7 @@ mod tests {
                     ctx.operator_reward.clone(),
                     FinalizedTxOut(funding_bearer.clone(), funding_ref),
                     operator_interest + RESIDUE,
+                    0,
                 );
         builder_with_residue
             .add_collateral(ctx.collateral.clone().into())

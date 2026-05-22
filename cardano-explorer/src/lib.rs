@@ -593,7 +593,11 @@ impl CardanoNetwork for Koios {
             "_extended": true
         });
         for attempt in 0..5 {
-            let found = self.post_utxos("utxo_info", body.clone()).await.into_iter().next();
+            let found = self
+                .post_utxos("utxo_info", body.clone())
+                .await
+                .into_iter()
+                .next();
             if found.is_some() {
                 return found;
             }

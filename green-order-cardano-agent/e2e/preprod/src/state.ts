@@ -56,6 +56,14 @@ export type PreprodE2eState = {
     submittedIntentDigest?: string;
     executionTxHash?: string;
   };
+  partialSmoke?: {
+    submittedIntentDigest: string;
+    executionTxHash: string;
+    oldStoreRootHex?: string;
+    newStoreRootHex?: string;
+    receivedAmount: string;
+    storePath: string;
+  };
 };
 
 export function emptyState(): PreprodE2eState {
@@ -132,6 +140,20 @@ export function validateState(state: PreprodE2eState): void {
         validateOutputRef(`entitlements[${index}].accountOutputRef`, entitlement.accountOutputRef);
       }
     });
+  }
+  if (state.partialSmoke) {
+    validateHex("partialSmoke.submittedIntentDigest", state.partialSmoke.submittedIntentDigest, 64);
+    validateHex("partialSmoke.executionTxHash", state.partialSmoke.executionTxHash, 64);
+    if (state.partialSmoke.oldStoreRootHex) {
+      validateHex("partialSmoke.oldStoreRootHex", state.partialSmoke.oldStoreRootHex, 64);
+    }
+    if (state.partialSmoke.newStoreRootHex) {
+      validateHex("partialSmoke.newStoreRootHex", state.partialSmoke.newStoreRootHex, 64);
+    }
+    validateDecimal("partialSmoke.receivedAmount", state.partialSmoke.receivedAmount);
+    if (!state.partialSmoke.storePath.trim()) {
+      throw new Error("partialSmoke.storePath must be a non-empty string");
+    }
   }
 }
 

@@ -60,6 +60,14 @@ Deno.test("state roundtrip preserves pool account pending account and entitlemen
         },
       },
     ],
+    partialSmoke: {
+      submittedIntentDigest: "f".repeat(64),
+      executionTxHash: "1".repeat(64),
+      oldStoreRootHex: "2".repeat(64),
+      newStoreRootHex: "3".repeat(64),
+      receivedAmount: "123",
+      storePath: "/tmp/green-account-stores.json",
+    },
   };
 
   await saveState(path, state);
@@ -105,5 +113,21 @@ Deno.test("state validation rejects malformed tx hash", () => {
       }),
     Error,
     "pendingAccount.outputRef.txHash",
+  );
+});
+
+Deno.test("state validation rejects partial smoke without store path", () => {
+  assertThrows(
+    () =>
+      validateState({
+        partialSmoke: {
+          submittedIntentDigest: "f".repeat(64),
+          executionTxHash: "1".repeat(64),
+          receivedAmount: "123",
+          storePath: "",
+        },
+      }),
+    Error,
+    "partialSmoke.storePath",
   );
 });
