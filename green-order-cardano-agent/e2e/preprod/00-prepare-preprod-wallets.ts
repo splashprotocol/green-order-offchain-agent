@@ -1,9 +1,4 @@
-import {
-  Emulator,
-  generateSeedPhrase,
-  getAddressDetails,
-  Lucid,
-} from "npm:@lucid-evolution/lucid@0.3.53";
+import { Emulator, generateSeedPhrase, getAddressDetails, Lucid } from "npm:@lucid-evolution/lucid@0.3.53";
 
 type PreparedWallet = {
   role: "batcher" | "deployment";
@@ -19,17 +14,19 @@ type PreparedWallets = {
   wallets: PreparedWallet[];
 };
 
-const statePath = ".state/preprod-wallets.json";
-const envPath = ".env.wallets";
+const statePath = Deno.env.get("WALLET_STATE_PATH")?.trim() || ".state/preprod-wallets.json";
+const envPath = Deno.env.get("WALLET_ENV_PATH")?.trim() || ".env.wallets";
+const forceNewWallets = Deno.env.get("FORCE_NEW_WALLETS")?.trim() === "1";
 
 const requestedAda = {
   batcher: 50,
   deployment: 20,
 } as const;
 
-await Deno.mkdir(".state", { recursive: true });
+await Deno.mkdir(dirname(statePath), { recursive: true });
+await Deno.mkdir(dirname(envPath), { recursive: true });
 
-const existing = await readExisting(statePath);
+const existing = forceNewWallets ? undefined : await readExisting(statePath);
 const wallets = existing ?? {
   createdAt: new Date().toISOString(),
   wallets: [
@@ -48,6 +45,11 @@ for (const wallet of wallets.wallets) {
 }
 console.log(`WALLET_STATE_PATH=${statePath}`);
 console.log(`WALLET_ENV_PATH=${envPath}`);
+
+function dirname(path: string): string {
+  const index = path.lastIndexOf("/");
+  return index < 0 ? "." : path.slice(0, index) || "/";
+}
 
 async function readExisting(path: string): Promise<PreparedWallets | undefined> {
   try {
