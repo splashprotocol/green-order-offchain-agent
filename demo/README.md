@@ -13,9 +13,9 @@ Run:
 
 The script creates fresh wallets for the run and prints one funding address.
 Send the requested amount of preprod tADA to that address. The script waits for
-funding, creates the needed setup boxes, starts the agent, runs the full-fill
-and partial-fill demos, verifies the residual continuation state, and writes a
-report.
+funding, starts the agent, creates and binds the needed on-chain setup, runs the
+full-fill and partial-fill demos, verifies the residual continuation state, and
+writes a report.
 
 Generated files are written under:
 
@@ -46,7 +46,9 @@ Regenerate a report without mutating chain or state:
 - The script refuses mainnet.
 - Every normal run creates fresh wallets.
 - Generated wallet keys stay under the run directory.
-- `--report-only` does not start the agent or submit transactions.
+- `--report-only` validates recorded tx hashes, but does not start the agent or submit transactions.
 - The agent is stopped on exit.
 
-See [AUDITOR.md](AUDITOR.md) for the full script-by-script description.
+See [SCRIPT_REFERENCE.md](SCRIPT_REFERENCE.md) for the operational
+script-by-script reference, and [AUDITOR.md](AUDITOR.md) for the higher-level
+audit guide.

@@ -3,6 +3,7 @@ import { submitSignedTx } from "./src/lucid.ts";
 import { loadConfig } from "./src/config.ts";
 import { loadState } from "./src/state.ts";
 import { loadPreprodEnv, lovelaceToAda, preprodProvider } from "./src/provider.ts";
+import { koiosUtxosAt } from "./src/koios.ts";
 
 type OperatorState = {
   fundingAddresses: string[];
@@ -24,7 +25,6 @@ if (!(lower < upper)) {
 
 const separatorAddresses = operator.fundingAddresses;
 const separatorLovelace = BigInt(Deno.env.get("SEPARATOR_FUNDING_LOVELACE") ?? "50000000");
-const forceCreate = Deno.env.get("FORCE_SEPARATOR_FUNDING") === "1";
 
 const existingByAddress = await Promise.all(
   separatorAddresses.map(async (address) => ({
@@ -38,7 +38,7 @@ const existingSeparators = existingByAddress.map(({ address, utxos }) => ({
     lower < utxo.txHash && utxo.txHash < upper && (utxo.assets.lovelace ?? 0n) >= separatorLovelace
   ),
 }));
-if (existingSeparators.every(({ separator }) => separator) && !forceCreate) {
+if (existingSeparators.every(({ separator }) => separator)) {
   console.log(
     `separator_funding_already_available=${
       existingSeparators
@@ -85,11 +85,10 @@ for (let attempt = 0; attempt < maxAttempts; attempt++) {
 throw new Error(`No separator funding tx hash found in ${maxAttempts} attempts for (${lower}, ${upper})`);
 
 async function waitForSeparators(addresses: string[], txHash: string): Promise<void> {
-  const provider = preprodProvider();
   for (let attempt = 0; attempt < 60; attempt++) {
     const found = await Promise.all(
       addresses.map(async (address) => {
-        const utxos = await provider.getUtxos(address);
+        const utxos = await koiosUtxosAt(address).catch(() => []);
         return utxos.some((utxo) => utxo.txHash === txHash);
       }),
     );

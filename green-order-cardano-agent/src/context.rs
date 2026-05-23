@@ -113,7 +113,7 @@ impl GreenAccountLookup for ExecutionContext {
         self.account_index
             .lock()
             .expect("account index lock poisoned")
-            .current(account_id)
+            .current_or_pending_base(account_id)
     }
 }
 

@@ -39,6 +39,7 @@ pub struct RawGreenIntent {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct GreenOrdersConfig {
     pub allow_partial: bool,
+    pub auto_submit_continuations: bool,
     pub intent_source: IntentSourceConfig,
 }
 
@@ -46,6 +47,7 @@ impl Default for GreenOrdersConfig {
     fn default() -> Self {
         Self {
             allow_partial: false,
+            auto_submit_continuations: true,
             intent_source: IntentSourceConfig::default(),
         }
     }
@@ -298,12 +300,14 @@ impl<'de> Deserialize<'de> for GreenOrdersConfig {
         struct Repr {
             #[serde(default)]
             allow_partial: bool,
+            auto_submit_continuations: Option<bool>,
             #[serde(default)]
             intent_source: IntentSourceConfig,
         }
         let repr = Repr::deserialize(deserializer)?;
         Ok(Self {
             allow_partial: repr.allow_partial,
+            auto_submit_continuations: repr.auto_submit_continuations.unwrap_or(true),
             intent_source: repr.intent_source,
         })
     }

@@ -21,12 +21,14 @@ demo_check_required_tools() {
 
 demo_refuse_unsafe_network() {
   local network="${CARDANO_NETWORK:-${NETWORK:-preprod}}"
-  case "${network,,}" in
+  local normalized
+  normalized="$(printf '%s' "$network" | tr '[:upper:]' '[:lower:]')"
+  case "$normalized" in
     mainnet)
       echo "refusing to run Catalyst demo on mainnet" >&2
       return 1
       ;;
-    preprod|preview|testnet|"")
+    preprod|"")
       ;;
     *)
       echo "unsupported network '$network'; set CARDANO_NETWORK=preprod" >&2

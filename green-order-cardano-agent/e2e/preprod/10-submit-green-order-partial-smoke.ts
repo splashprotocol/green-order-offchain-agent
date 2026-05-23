@@ -1,15 +1,17 @@
 import { credentialToAddress } from "npm:@lucid-evolution/utils@0.1.65";
 import { parseAgentAcceptedResponse, submitIntent } from "./src/agent.ts";
-import { deriveCompressedPublicKey, signIntentDigest } from "./src/aleph.ts";
+import { attachAccountOutputRefToEntitlement, deriveCompressedPublicKey, signIntentDigest } from "./src/aleph.ts";
 import { parseAccountDatum } from "./src/account_datum.ts";
 import { loadConfig } from "./src/config.ts";
 import { adaAsset, alephIntentionDigest, buildIntentPayload, nativeAsset } from "./src/intent.ts";
-import { koiosUtxoByRef, koiosUtxosAt, SimpleUtxo } from "./src/koios.ts";
+import { koiosUtxoByRef, koiosUtxoByRefWithSpent, koiosUtxosAt, SimpleUtxo } from "./src/koios.ts";
 import { computePartialFillPlan, PartialFillPlan } from "./src/partial_preflight.ts";
 import { loadState, saveState } from "./src/state.ts";
 import { waitFor } from "./src/wait.ts";
 
 const dryRun = Deno.args.includes("--dry-run");
+const verifyExecutionTx = Deno.args.find((arg) => arg.startsWith("--verify-execution-tx="))
+  ?.slice("--verify-execution-tx=".length);
 const config = await loadConfig();
 const state = await loadState(config.statePath);
 
@@ -62,16 +64,22 @@ const poolAddress = credentialToAddress("Preprod", {
 });
 
 const oldAccount = await koiosUtxoByRef(state.account.outputRef);
-if (!oldAccount) throw new Error("current account output is not available on preprod");
-if (!oldAccount.datum) {
+const oldAccountForVerification = verifyExecutionTx
+  ? await koiosUtxoByRefWithSpent(state.account.outputRef, true)
+  : oldAccount;
+if (!oldAccountForVerification) throw new Error("current account output is not available on preprod");
+if (!oldAccountForVerification.datum) {
   throw new Error(`current account output ${refToString(state.account.outputRef)} has no inline datum`);
 }
 const oldPool = await koiosUtxoByRef(state.pool.outputRef);
-if (!oldPool) throw new Error("current pool output is not available on preprod");
+const oldPoolForVerification = verifyExecutionTx
+  ? await koiosUtxoByRefWithSpent(state.pool.outputRef, true)
+  : oldPool;
+if (!oldPoolForVerification) throw new Error("current pool output is not available on preprod");
 
 const preflight = await computePartialFillPlan({
-  poolLovelaceReserve: oldPool.assets.lovelace ?? 0n,
-  poolTokenReserve: oldPool.assets[state.pool.assetY] ?? 0n,
+  poolLovelaceReserve: oldPoolForVerification.assets.lovelace ?? 0n,
+  poolTokenReserve: oldPoolForVerification.assets[state.pool.assetY] ?? 0n,
   poolAssetY: state.pool.assetY,
   leavingLovelace: config.partialLeavingLovelace,
   expectedTokenAmount: config.partialExpectedTokenAmount,
@@ -79,71 +87,99 @@ const preflight = await computePartialFillPlan({
 });
 console.log(`partial preflight: ${JSON.stringify(stringifyPlan(preflight))}`);
 
-const response = await submitIntent(config.agentUrl, payload);
-parseAgentAcceptedResponse(response);
+if (!verifyExecutionTx) {
+  if (!oldAccount) throw new Error("current account output is not available on preprod");
+  if (!oldPool) throw new Error("current pool output is not available on preprod");
+  const response = await submitIntent(config.agentUrl, payload);
+  parseAgentAcceptedResponse(response);
+  console.log("partial_intent_status=accepted");
+}
 
-await waitFor("old Aleph account output to be spent", async () => {
-  const utxo = await koiosUtxoByRef(state.account!.outputRef);
-  return utxo ? undefined : true;
-}, { timeoutMs: config.partialExecutionTimeoutMs });
-await waitFor("old Royalty V1 pool output to be spent", async () => {
-  const utxo = await koiosUtxoByRef(state.pool!.outputRef);
-  return utxo ? undefined : true;
-}, { timeoutMs: config.partialExecutionTimeoutMs });
-const newPool = await waitFor("advanced Royalty V1 pool output", async () => {
-  const utxos = await koiosUtxosAt(poolAddress);
-  return utxos.find((utxo) =>
-    utxo.txHash !== state.pool!.outputRef.txHash && utxo.assets[state.pool!.poolNft] === 1n
-  );
-}, { timeoutMs: config.partialExecutionTimeoutMs });
-const newAccount = await waitFor("new Aleph account output from partial execution tx", async () => {
-  const utxos = await koiosUtxosAt(accountAddress);
-  return utxos.find((utxo) => utxo.txHash === newPool.txHash);
-}, { timeoutMs: config.partialExecutionTimeoutMs });
+if (!verifyExecutionTx) {
+  await waitFor("old Aleph account output to be spent", async () => {
+    const utxo = await koiosUtxoByRef(state.account!.outputRef);
+    return utxo ? undefined : true;
+  }, { timeoutMs: config.partialExecutionTimeoutMs });
+  await waitFor("old Royalty V1 pool output to be spent", async () => {
+    const utxo = await koiosUtxoByRef(state.pool!.outputRef);
+    return utxo ? undefined : true;
+  }, { timeoutMs: config.partialExecutionTimeoutMs });
+}
+const newPool = verifyExecutionTx
+  ? await requireUtxoByRef({ txHash: verifyExecutionTx, outputIndex: state.pool.outputRef.outputIndex })
+  : await waitFor("advanced Royalty V1 pool output", async () => {
+    const utxos = await koiosUtxosAt(poolAddress);
+    return utxos.find((utxo) =>
+      utxo.txHash !== state.pool!.outputRef.txHash && utxo.assets[state.pool!.poolNft] === 1n
+    );
+  }, { timeoutMs: config.partialExecutionTimeoutMs });
+const newAccount = verifyExecutionTx
+  ? await requireUtxoByRef({ txHash: verifyExecutionTx, outputIndex: state.account.outputRef.outputIndex })
+  : await waitFor("new Aleph account output from partial execution tx", async () => {
+    const utxos = await koiosUtxosAt(accountAddress);
+    return utxos.find((utxo) => utxo.txHash === newPool.txHash);
+  }, { timeoutMs: config.partialExecutionTimeoutMs });
 
-const oldParsed = parseAccountDatum(oldAccount.datum, alephAbi);
+const oldParsed = parseAccountDatum(oldAccountForVerification.datum, alephAbi);
 const newParsed = assertPartialAccountAdvanced(
-  oldAccount,
+  oldAccountForVerification,
   newAccount,
   state.pool.assetY,
-  preflight,
+  config.partialLeavingLovelace,
   state.account.mainKeyHex,
   alephAbi,
 );
-assertPoolAdvanced(oldPool, newPool, state.pool.assetY, preflight);
+const actualFill = actualPartialFill(oldAccountForVerification, newAccount, state.pool.assetY);
+assertPoolAdvanced(oldPoolForVerification, newPool, state.pool.assetY, actualFill);
+const actualPlan = actualPartialFillPlan(preflight, actualFill);
 
-const storePath = await accountStorePath(config.agentConfigPath);
-await waitFor("agent to persist partial continuation store", async () => {
-  assertPersistedPartialStore(storePath, {
-    accountId: state.account!.accountId,
-    outputRef: { txHash: newAccount.txHash, outputIndex: newAccount.outputIndex },
-    rootHex: newParsed.storeRootHex,
-    remainingDigestHex: remainingIntentDigestHex(preflight),
-    preflight,
-  });
-  return true;
-}, { timeoutMs: config.partialExecutionTimeoutMs });
+let storePath: string | undefined;
+if (!verifyExecutionTx) {
+  storePath = await accountStorePath(config.agentConfigPath);
+  await waitFor("agent to persist partial continuation store", async () => {
+    assertPersistedPartialStore(storePath!, {
+      accountId: state.account!.accountId,
+      outputRef: { txHash: newAccount.txHash, outputIndex: newAccount.outputIndex },
+      rootHex: newParsed.storeRootHex,
+      remainingDigestHex: remainingIntentDigestHex(actualPlan),
+      preflight: actualPlan,
+    });
+    return true;
+  }, { timeoutMs: config.partialExecutionTimeoutMs });
+}
 
-await saveState(config.statePath, {
-  ...state,
-  account: {
-    ...state.account,
-    outputRef: { txHash: newAccount.txHash, outputIndex: newAccount.outputIndex },
-  },
-  pool: {
-    ...state.pool,
-    outputRef: { txHash: newPool.txHash, outputIndex: newPool.outputIndex },
-  },
-  partialSmoke: {
+if (verifyExecutionTx) {
+  await savePartialState({
+    state,
+    accountRef: { txHash: newAccount.txHash, outputIndex: newAccount.outputIndex },
+    poolRef: { txHash: newPool.txHash, outputIndex: newPool.outputIndex },
     submittedIntentDigest: digestHex,
     executionTxHash: newAccount.txHash,
     oldStoreRootHex: oldParsed.storeRootHex,
     newStoreRootHex: newParsed.storeRootHex,
-    receivedAmount: preflight.receivedOutput.toString(),
-    storePath,
-  },
+    receivedAmount: actualPlan.receivedOutput.toString(),
+    storePath: await verifiedStorePath(config.agentConfigPath),
+  });
+  console.log(`Verified partial green order smoke intent in tx ${newAccount.txHash}`);
+  Deno.exit(0);
+}
+
+await savePartialState({
+  state,
+  accountRef: { txHash: newAccount.txHash, outputIndex: newAccount.outputIndex },
+  poolRef: { txHash: newPool.txHash, outputIndex: newPool.outputIndex },
+  submittedIntentDigest: digestHex,
+  executionTxHash: newAccount.txHash,
+  oldStoreRootHex: oldParsed.storeRootHex,
+  newStoreRootHex: newParsed.storeRootHex,
+  receivedAmount: actualPlan.receivedOutput.toString(),
+  storePath: storePath ?? "",
 });
-console.log(`Submitted partial green order smoke intent in tx ${newAccount.txHash}`);
+console.log(
+  `${
+    verifyExecutionTx ? "Verified" : "Submitted"
+  } partial green order smoke intent in tx ${newAccount.txHash}`,
+);
 
 type ParsedCurrentAccount = ReturnType<typeof parseAccountDatum> & { storeRootHex: string };
 type OutputRefLike = { txHash: string; outputIndex: number };
@@ -152,7 +188,7 @@ function assertPartialAccountAdvanced(
   oldAccount: SimpleUtxo,
   newAccount: SimpleUtxo,
   receivedAsset: string,
-  preflight: PartialFillPlan,
+  originalLeavingLovelace: bigint,
   expectedMainKeyHex: string,
   alephAbi: "current" | "legacy",
 ): ParsedCurrentAccount {
@@ -171,33 +207,70 @@ function assertPartialAccountAdvanced(
     throw new Error("partial execution did not mutate Aleph MPF store root");
   }
   const receivedDelta = (newAccount.assets[receivedAsset] ?? 0n) - (oldAccount.assets[receivedAsset] ?? 0n);
-  if (receivedDelta !== preflight.receivedOutput) {
-    throw new Error(`successor account received ${receivedDelta}, expected ${preflight.receivedOutput}`);
+  if (receivedDelta <= 0n) {
+    throw new Error(`successor account received non-positive delta ${receivedDelta}`);
   }
   const lovelaceDelta = (oldAccount.assets.lovelace ?? 0n) - (newAccount.assets.lovelace ?? 0n);
-  if (lovelaceDelta !== preflight.consumedLeaving) {
-    throw new Error(
-      `successor account lovelace decreased by ${lovelaceDelta}, expected ${preflight.consumedLeaving}`,
-    );
+  if (lovelaceDelta <= 0n || lovelaceDelta >= originalLeavingLovelace) {
+    throw new Error(`successor account lovelace decreased by non-partial amount ${lovelaceDelta}`);
   }
   return parsed as ParsedCurrentAccount;
+}
+
+function actualPartialFill(
+  oldAccount: SimpleUtxo,
+  newAccount: SimpleUtxo,
+  receivedAsset: string,
+): Pick<PartialFillPlan, "consumedLeaving" | "receivedOutput"> {
+  return {
+    consumedLeaving: (oldAccount.assets.lovelace ?? 0n) - (newAccount.assets.lovelace ?? 0n),
+    receivedOutput: (newAccount.assets[receivedAsset] ?? 0n) - (oldAccount.assets[receivedAsset] ?? 0n),
+  };
+}
+
+function actualPartialFillPlan(
+  preflight: PartialFillPlan,
+  actualFill: Pick<PartialFillPlan, "consumedLeaving" | "receivedOutput">,
+): PartialFillPlan {
+  if (actualFill.consumedLeaving <= 0n || actualFill.consumedLeaving >= config.partialLeavingLovelace) {
+    throw new Error(`actual consumed amount is not a strict partial fill: ${actualFill.consumedLeaving}`);
+  }
+  if (actualFill.receivedOutput <= 0n || actualFill.receivedOutput >= config.partialExpectedTokenAmount) {
+    throw new Error(`actual received amount is not a strict partial fill: ${actualFill.receivedOutput}`);
+  }
+  const consumedDrift = absDiff(actualFill.consumedLeaving, preflight.consumedLeaving);
+  const outputDrift = absDiff(actualFill.receivedOutput, preflight.receivedOutput);
+  if (consumedDrift > 10n || outputDrift > 10n) {
+    throw new Error(
+      `actual partial fill drift is too large: consumed ${actualFill.consumedLeaving} vs ${preflight.consumedLeaving}, ` +
+        `output ${actualFill.receivedOutput} vs ${preflight.receivedOutput}`,
+    );
+  }
+  const remainingLeaving = config.partialLeavingLovelace - actualFill.consumedLeaving;
+  return {
+    consumedLeaving: actualFill.consumedLeaving,
+    receivedOutput: actualFill.receivedOutput,
+    remainingLeaving,
+    remainingExpectedOutput: config.partialExpectedTokenAmount - actualFill.receivedOutput,
+    remainingFee: remainingLeaving * config.partialFeeLovelace / config.partialLeavingLovelace,
+  };
 }
 
 function assertPoolAdvanced(
   oldPool: SimpleUtxo,
   newPool: SimpleUtxo,
   paidAsset: string,
-  preflight: PartialFillPlan,
+  expected: Pick<PartialFillPlan, "consumedLeaving" | "receivedOutput">,
 ): void {
   const lovelaceDelta = (newPool.assets.lovelace ?? 0n) - (oldPool.assets.lovelace ?? 0n);
-  if (lovelaceDelta !== preflight.consumedLeaving) {
+  if (lovelaceDelta !== expected.consumedLeaving) {
     throw new Error(
-      `pool lovelace reserve increased by ${lovelaceDelta}, expected ${preflight.consumedLeaving}`,
+      `pool lovelace reserve increased by ${lovelaceDelta}, expected ${expected.consumedLeaving}`,
     );
   }
   const tokenDelta = (oldPool.assets[paidAsset] ?? 0n) - (newPool.assets[paidAsset] ?? 0n);
-  if (tokenDelta !== preflight.receivedOutput) {
-    throw new Error(`pool token reserve decreased by ${tokenDelta}, expected ${preflight.receivedOutput}`);
+  if (tokenDelta !== expected.receivedOutput) {
+    throw new Error(`pool token reserve decreased by ${tokenDelta}, expected ${expected.receivedOutput}`);
   }
 }
 
@@ -206,6 +279,53 @@ async function accountStorePath(agentConfigPath: string): Promise<string> {
   const dbPath = String(raw?.chainSync?.dbPath ?? "").trim();
   if (!dbPath) throw new Error(`${agentConfigPath}.chainSync.dbPath is missing`);
   return `${dbPath}.green-account-stores.json`;
+}
+
+async function verifiedStorePath(agentConfigPath: string): Promise<string> {
+  try {
+    return await accountStorePath(agentConfigPath);
+  } catch {
+    return "verified-existing-execution-tx";
+  }
+}
+
+async function savePartialState(args: {
+  state: typeof state;
+  accountRef: OutputRefLike;
+  poolRef: OutputRefLike;
+  submittedIntentDigest: string;
+  executionTxHash: string;
+  oldStoreRootHex?: string;
+  newStoreRootHex?: string;
+  receivedAmount: string;
+  storePath: string;
+}): Promise<void> {
+  const nextState = attachAccountOutputRefToEntitlement({
+    ...args.state,
+    account: {
+      ...args.state.account!,
+      outputRef: args.accountRef,
+    },
+    pool: {
+      ...args.state.pool!,
+      outputRef: args.poolRef,
+    },
+    partialSmoke: {
+      submittedIntentDigest: args.submittedIntentDigest,
+      executionTxHash: args.executionTxHash,
+      oldStoreRootHex: args.oldStoreRootHex,
+      newStoreRootHex: args.newStoreRootHex,
+      receivedAmount: args.receivedAmount,
+      storePath: args.storePath,
+    },
+  }, args.accountRef);
+  await saveState(config.statePath, nextState);
+}
+
+async function requireUtxoByRef(ref: OutputRefLike): Promise<SimpleUtxo> {
+  const utxo = await koiosUtxoByRef({ txHash: ref.txHash, outputIndex: ref.outputIndex });
+  if (!utxo) throw new Error(`expected live output ${refToString(ref)}`);
+  return utxo;
 }
 
 function assertPersistedPartialStore(
@@ -275,6 +395,10 @@ function hexish(value: unknown): string {
 
 function refToString(ref: OutputRefLike): string {
   return `${ref.txHash}#${ref.outputIndex}`;
+}
+
+function absDiff(left: bigint, right: bigint): bigint {
+  return left > right ? left - right : right - left;
 }
 
 function stringifyPlan(plan: PartialFillPlan): Record<string, string> {

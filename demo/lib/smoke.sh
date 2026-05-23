@@ -7,9 +7,27 @@ demo_run_smoke_phases() {
   demo_run_partial_fill_smoke
 }
 
+demo_partial_smoke_has_execution_tx() {
+  local state="$DEMO_RUN_DIR/preprod-green-order-e2e.json"
+  local existing_partial_tx
+  existing_partial_tx="$(jq -r '.partialSmoke.executionTxHash // empty' "$state" 2>/dev/null || true)"
+  [[ "$existing_partial_tx" =~ ^[0-9a-fA-F]{64}$ ]]
+}
+
+demo_full_smoke_execution_tx() {
+  jq -r '.smoke.executionTxHash // empty' "$DEMO_RUN_DIR/preprod-green-order-e2e.json" 2>/dev/null || true
+}
+
 demo_run_full_fill_smoke() {
   if demo_checkpoint_is_done "full_fill"; then
     echo "smoke: reusing full-fill result"
+    return 0
+  fi
+  local existing_full_tx
+  existing_full_tx="$(demo_full_smoke_execution_tx)"
+  if [[ "$existing_full_tx" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    echo "smoke: reusing recorded full-fill tx $existing_full_tx"
+    demo_checkpoint_done "full_fill"
     return 0
   fi
   echo "smoke: running full-fill intent"
@@ -28,7 +46,21 @@ demo_run_partial_fill_smoke() {
     echo "smoke: reusing partial-fill result"
     return 0
   fi
+  local existing_partial_tx
+  existing_partial_tx="$(jq -r '.partialSmoke.executionTxHash // empty' "$DEMO_RUN_DIR/preprod-green-order-e2e.json" 2>/dev/null || true)"
+  if [[ "$existing_partial_tx" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    echo "smoke: reusing recorded partial-fill tx $existing_partial_tx"
+    demo_checkpoint_done "partial_fill"
+    return 0
+  fi
   echo "smoke: running partial-fill intent"
+  demo_wait_for_account_observed
+  if demo_account_needs_external_bind; then
+    demo_bind_account_onchain
+    demo_wait_for_indexer_ready
+  else
+    echo "bootstrap: account already bound or tracked by agent"
+  fi
   (
     cd "$DEMO_E2E_DIR"
     export STATE_PATH="$DEMO_RUN_DIR/preprod-green-order-e2e.json"

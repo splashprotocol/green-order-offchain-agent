@@ -18,7 +18,7 @@ use futures::stream::FusedStream;
 use futures::Stream;
 use futures::{SinkExt, StreamExt};
 use liquidity_book::interpreter::RecipeInterpreter;
-use log::{error, trace, warn};
+use log::{error, info, trace, warn};
 use nonempty::NonEmpty;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -757,10 +757,25 @@ where
         match event {
             Either::Left(evolving_entity) => {
                 if let Some(upd) = self.update_state(evolving_entity) {
+                    info!(
+                        "Engine stream {} accepted liquidity-book event for pair {}",
+                        self.stream_id, pair
+                    );
                     self.sync_book(&pair, upd)
+                } else {
+                    info!(
+                        "Engine stream {} ignored liquidity-book event for pair {} because it did not change resolved state",
+                        self.stream_id, pair
+                    );
                 }
             }
-            Either::Right(atomic_entity) => self.sync_backlog(&pair, atomic_entity),
+            Either::Right(atomic_entity) => {
+                info!(
+                    "Engine stream {} accepted backlog event for pair {}",
+                    self.stream_id, pair
+                );
+                self.sync_backlog(&pair, atomic_entity)
+            }
         }
         self.focus_set.push_back(pair);
     }
@@ -908,7 +923,12 @@ where
             // Finally, attempt to matchmake.
             while let Some(focus_pair) = self.focus_set.pop_front() {
                 // Try TLB:
-                if let (Some(recipe), events) = self.multi_book.get_mut(&focus_pair).attempt() {
+                let (maybe_recipe, events) = self.multi_book.get_mut(&focus_pair).attempt();
+                if let Some(recipe) = maybe_recipe {
+                    info!(
+                        "Engine stream {} built matchmaking recipe for pair {}",
+                        self.stream_id, focus_pair
+                    );
                     let mut report = ExecutionReport::new(focus_pair, events);
                     match ExecutionRecipe::link(recipe, |id| {
                         resolve_state(id, &self.index)
@@ -965,11 +985,19 @@ where
                             }
                         }
                         Err(invalid_fragments) => {
+                            warn!(
+                                "Engine stream {} failed to link recipe for {}: {:?}",
+                                self.stream_id, focus_pair, invalid_fragments
+                            );
                             self.on_linkage_failure(focus_pair, invalid_fragments);
                         }
                     }
                 } else {
                     // No recipe from TLB for this pair — engine is ok, nothing to matchmake.
+                    info!(
+                        "Engine stream {} found no matchmaking recipe for pair {}",
+                        self.stream_id, focus_pair
+                    );
                     self.try_send_engine_status(crate::health::EngineStatus::Ok);
                 }
                 // Try Backlog:

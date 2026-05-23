@@ -7,6 +7,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use cml_crypto::RawBytesEncoding;
 use futures::channel::mpsc;
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use spectrum_offchain::domain::Has;
 use spectrum_offchain::partitioning::Partitioned;
@@ -92,9 +93,12 @@ where
 
     let event = admitted_intent_to_event(admitted);
     let pair = event.0;
+    info!("Accepted green intent for pair {}", pair);
     if state.events.get_mut(pair).try_send(event).is_err() {
+        warn!("Green intent event channel is unavailable for pair {}", pair);
         return rejected(StatusCode::SERVICE_UNAVAILABLE, "eventChannelUnavailable");
     }
+    info!("Queued green intent for pair {}", pair);
 
     (
         StatusCode::ACCEPTED,

@@ -91,6 +91,20 @@ impl AccountIndex {
             .map(|account| account.utxo.clone())
     }
 
+    pub fn current_or_pending_base(&self, account_id: AccountId) -> Option<FinalizedTxOut> {
+        self.current(account_id).or_else(|| {
+            if !self.pending_by_account_id.contains(&account_id) {
+                return None;
+            }
+            self.pending_store_by_snapshot_id
+            .values()
+            .filter(|(pending_account_id, _, _)| *pending_account_id == account_id)
+            .filter_map(|(_, old_ref, _)| self.rollback_by_spent_ref.get(old_ref))
+            .map(|(_, account)| account.utxo.clone())
+            .next()
+        })
+    }
+
     pub fn current_store_root(&self, account_id: AccountId) -> Option<[u8; 32]> {
         self.by_account_id
             .get(&account_id)
@@ -165,15 +179,12 @@ impl AccountIndex {
         key: Vec<u8>,
         updated_intent: AlephIntention,
     ) -> Result<bloom_offchain_cardano::orders::green::PlannedStoreDelta, GreenStorePlanningError> {
-        let account = self
-            .by_account_id
-            .get(&account_id)
+        let base_store = self
+            .store_for_planning(account_id, old_ref)
             .ok_or(GreenStorePlanningError::MissingAccount)?;
-        if account.utxo.reference() != old_ref {
-            return Err(GreenStorePlanningError::MissingAccount);
-        }
-        let mut predicted = account.store.clone();
+        let mut predicted = base_store.clone();
         let delta = predicted.insert_remaining(key, canonical_order_id, updated_intent)?;
+        self.remove_pending_snapshots_for(account_id, old_ref);
         let snapshot_id = self.reserve_predicted_store_snapshot(account_id, old_ref, predicted);
         Ok(planned_delta(delta, snapshot_id))
     }
@@ -186,15 +197,12 @@ impl AccountIndex {
         old_digest: [u8; 32],
         updated_intent: AlephIntention,
     ) -> Result<bloom_offchain_cardano::orders::green::PlannedStoreDelta, GreenStorePlanningError> {
-        let account = self
-            .by_account_id
-            .get(&account_id)
+        let base_store = self
+            .store_for_planning(account_id, old_ref)
             .ok_or(GreenStorePlanningError::MissingAccount)?;
-        if account.utxo.reference() != old_ref {
-            return Err(GreenStorePlanningError::MissingAccount);
-        }
-        let mut predicted = account.store.clone();
+        let mut predicted = base_store.clone();
         let delta = predicted.update_remaining(key, old_digest, updated_intent)?;
+        self.remove_pending_snapshots_for(account_id, old_ref);
         let snapshot_id = self.reserve_predicted_store_snapshot(account_id, old_ref, predicted);
         Ok(planned_delta(delta, snapshot_id))
     }
@@ -206,17 +214,62 @@ impl AccountIndex {
         key: Vec<u8>,
         old_digest: [u8; 32],
     ) -> Result<bloom_offchain_cardano::orders::green::PlannedStoreCompletion, GreenStorePlanningError> {
-        let account = self
-            .by_account_id
-            .get(&account_id)
+        let base_store = self
+            .store_for_planning(account_id, old_ref)
             .ok_or(GreenStorePlanningError::MissingAccount)?;
-        if account.utxo.reference() != old_ref {
-            return Err(GreenStorePlanningError::MissingAccount);
-        }
-        let mut predicted = account.store.clone();
+        let mut predicted = base_store.clone();
         let completion = predicted.mark_completed(key, old_digest)?;
+        self.remove_pending_snapshots_for(account_id, old_ref);
         let snapshot_id = self.reserve_predicted_store_snapshot(account_id, old_ref, predicted);
         Ok(planned_completion(completion, snapshot_id))
+    }
+
+    fn store_for_planning(&self, account_id: AccountId, old_ref: OutputRef) -> Option<&AccountStore> {
+        if let Some(account) = self.by_account_id.get(&account_id) {
+            if account.utxo.reference() != old_ref {
+                return None;
+            }
+            return Some(&account.store);
+        }
+        if !self.pending_by_account_id.contains(&account_id)
+            || !self.rollback_by_spent_ref.contains_key(&old_ref)
+        {
+            return None;
+        }
+        let has_matching_pending = self
+            .pending_store_by_snapshot_id
+            .values()
+            .any(|(pending_account_id, pending_old_ref, _)| {
+                *pending_account_id == account_id && *pending_old_ref == old_ref
+            });
+        if !has_matching_pending {
+            return None;
+        }
+        self.rollback_by_spent_ref
+            .get(&old_ref)
+            .map(|(_, account)| &account.store)
+    }
+
+    fn remove_pending_snapshots_for(
+        &mut self,
+        account_id: AccountId,
+        old_ref: OutputRef,
+    ) {
+        let removed = self
+            .pending_store_by_snapshot_id
+            .iter()
+            .filter(|(_, (pending_account_id, pending_old_ref, _))| {
+                *pending_account_id == account_id && *pending_old_ref == old_ref
+            })
+            .map(|(snapshot_id, _)| *snapshot_id)
+            .collect::<HashSet<_>>();
+        if removed.is_empty() {
+            return;
+        }
+        self.pending_store_by_snapshot_id
+            .retain(|snapshot_id, _| !removed.contains(snapshot_id));
+        self.pending_snapshot_by_output_ref
+            .retain(|_, snapshot_id| !removed.contains(snapshot_id));
     }
 
     pub fn reserve_predicted_store_snapshot(
@@ -227,6 +280,11 @@ impl AccountIndex {
     ) -> StoreSnapshotId {
         let snapshot_id = StoreSnapshotId(self.next_snapshot_id);
         self.next_snapshot_id += 1;
+        self.remove_bound_output(old_ref);
+        if let Some(output) = self.by_account_id.remove(&account_id) {
+            self.rollback_by_spent_ref.insert(old_ref, (account_id, output));
+        }
+        self.pending_by_account_id.insert(account_id);
         self.pending_store_by_snapshot_id
             .insert(snapshot_id, (account_id, old_ref, predicted_store));
         self.persist_account_stores();
@@ -301,6 +359,10 @@ impl AccountIndex {
         produced_accounts: impl IntoIterator<Item = AlephAccountUtxo>,
     ) {
         let consumed_refs = consumed_refs.into_iter().collect::<HashSet<_>>();
+        let consumed_account_ids = consumed_refs
+            .iter()
+            .filter_map(|output_ref| self.by_output_ref.get(output_ref).copied())
+            .collect::<HashSet<_>>();
         for output_ref in &consumed_refs {
             self.observe_consumed(*output_ref);
         }
@@ -310,6 +372,9 @@ impl AccountIndex {
                 .bind_confirmed_store_for_consumed_refs(&consumed_refs, account.clone())
                 .is_ok()
             {
+                continue;
+            }
+            if self.bind_empty_successor_for_consumed_account(&consumed_account_ids, account.clone()) {
                 continue;
             }
             self.observe_created_or_updated(account);
@@ -494,6 +559,31 @@ impl AccountIndex {
                 store,
             },
         );
+    }
+
+    fn bind_empty_successor_for_consumed_account(
+        &mut self,
+        consumed_account_ids: &HashSet<AccountId>,
+        account: AlephAccountUtxo,
+    ) -> bool {
+        if consumed_account_ids.len() != 1 {
+            return false;
+        }
+        let Some(store) = AccountStore::from_observed_root(account.state.store_root) else {
+            return false;
+        };
+        let account_id = *consumed_account_ids.iter().next().expect("len checked");
+        if !self.pending_by_account_id.contains(&account_id) {
+            return false;
+        }
+        self.bind_indexed(
+            account_id,
+            IndexedAccount {
+                utxo: FinalizedTxOut::new(account.output, account.output_ref),
+                store,
+            },
+        );
+        true
     }
 
     fn bind_indexed(&mut self, account_id: AccountId, indexed: IndexedAccount) {
@@ -773,6 +863,91 @@ mod tests {
         let finalized = index.current(id).expect("continuation should re-bind account");
         assert_eq!(finalized.reference(), new_ref);
         assert_eq!(finalized.0, new_output);
+    }
+
+    #[test]
+    fn transaction_rebinds_empty_successor_for_consumed_bound_account() {
+        let id = account_id(31);
+        let old_ref = output_ref(33);
+        let new_ref = output_ref(34);
+        let old_output = dummy_output(2_000_000);
+        let new_output = dummy_output(2_100_000);
+        let mut index = AccountIndex::default();
+
+        index.observe_created_or_updated(account_utxo(old_ref, old_output));
+        index.bind_external_account_id_once(id, old_ref).unwrap();
+
+        index.observe_transaction([old_ref], [account_utxo(new_ref, new_output.clone())]);
+
+        let finalized = index.current(id).expect("empty successor should re-bind account");
+        assert_eq!(finalized.reference(), new_ref);
+        assert_eq!(finalized.0, new_output);
+        let status = index.account_status(id, new_ref);
+        assert!(status.current);
+        assert!(!status.pending);
+        assert!(!status.unbound);
+    }
+
+    #[test]
+    fn reserved_predicted_store_locks_current_account_until_successor_arrives() {
+        let id = account_id(32);
+        let old_ref = output_ref(35);
+        let new_ref = output_ref(36);
+        let pending_intent = intent(1_000);
+        let pending_key = pending_intent.intent_key();
+        let pending_digest = pending_intent.digest();
+        let mut successor_intent = intent(500);
+        successor_intent.target_nonce_value = pending_intent.target_nonce_value;
+        let mut index = AccountIndex::default();
+        let mut store = crate::account_store::AccountStore::empty();
+        store
+            .insert_remaining(pending_key.clone(), order_id(32), pending_intent.clone())
+            .unwrap();
+        let mut predicted_store = store.clone();
+        predicted_store
+            .update_remaining(pending_key.clone(), pending_digest, successor_intent.clone())
+            .unwrap();
+        let predicted_root = predicted_store.root();
+
+        index.bind_indexed(
+            id,
+            IndexedAccount {
+                utxo: FinalizedTxOut::new(dummy_output(2_000_000), old_ref),
+                store,
+            },
+        );
+        assert_eq!(index.pending_continuations().len(), 1);
+
+        index
+            .plan_path_update(
+                id,
+                old_ref,
+                pending_key,
+                pending_digest,
+                successor_intent,
+            )
+            .unwrap();
+
+        assert_eq!(index.current(id), None);
+        assert_eq!(
+            index
+                .current_or_pending_base(id)
+                .map(|account| account.reference()),
+            Some(old_ref)
+        );
+        assert!(index.pending_continuations().is_empty());
+
+        index.observe_transaction(
+            [old_ref],
+            [account_utxo_with_root(
+                new_ref,
+                dummy_output(2_000_000),
+                predicted_root,
+            )],
+        );
+
+        assert_eq!(index.current(id).map(|account| account.reference()), Some(new_ref));
+        assert_eq!(index.pending_continuations().len(), 1);
     }
 
     #[test]

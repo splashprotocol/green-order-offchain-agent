@@ -14,16 +14,19 @@ import {
   TEST_TOKEN_NAME_PREFIX_HEX,
   validateRoyaltyPoolPlan,
 } from "./src/royalty_pool_v1.ts";
-import { loadState, saveState } from "./src/state.ts";
+import { loadState, PoolValidator, PreprodE2eState, saveState } from "./src/state.ts";
 import { waitFor } from "./src/wait.ts";
 
 const dryRun = Deno.args.includes("--dry-run");
 const force = Deno.args.includes("--force");
+const minPoolTxHash = Deno.env.get("POOL_MIN_TX_HASH")?.trim();
 
 const config = await loadConfig();
 let state = await loadState(config.statePath);
 if (state.pool && !force) {
-  console.log(`state.pool already exists at ${state.pool.outputRef.txHash}#${state.pool.outputRef.outputIndex}; nothing to create`);
+  console.log(
+    `state.pool already exists at ${state.pool.outputRef.txHash}#${state.pool.outputRef.outputIndex}; nothing to create`,
+  );
   Deno.exit(0);
 }
 if (force) {
@@ -46,28 +49,8 @@ if (paymentCred.type !== "Key") {
 const nativePolicy = scriptFromNative({ type: "sig", keyHash: paymentCred.hash });
 const tokenPolicyId = mintingPolicyToId(nativePolicy);
 const lqPolicyId = tokenPolicyId;
-let pendingPool = state.pendingPool;
-if (!pendingPool) {
-  const suffix = randomHex(8);
-  pendingPool = {
-    validator,
-    poolNftNameHex: `${POOL_NFT_NAME_PREFIX_HEX}${suffix}`,
-    lqTokenNameHex: `${LQ_TOKEN_NAME_PREFIX_HEX}${suffix}`,
-    testTokenNameHex: `${TEST_TOKEN_NAME_PREFIX_HEX}${suffix}`,
-  };
-  state = { ...state, pendingPool };
-  if (!dryRun) await saveState(config.statePath, state);
-}
-const plan = planRoyaltyPool(config.deployment, tokenPolicyId, lqPolicyId, {
-  initialLovelace: config.poolInitialLovelace,
-  initialTokenAmount: config.poolInitialTokenAmount,
-  poolNftNameHex: pendingPool.poolNftNameHex,
-  lqTokenNameHex: pendingPool.lqTokenNameHex,
-  testTokenNameHex: pendingPool.testTokenNameHex,
-  adminScriptHash: config.deployment[validator].hash,
-  treasuryScriptHash: config.deployment[validator].hash,
-  royaltyPubKeyHex: paymentCred.hash.padEnd(64, "0").slice(0, 64),
-});
+let pendingPool = state.pendingPool ?? newPendingPool(validator);
+let plan = planPendingPool(pendingPool);
 validateRoyaltyPoolPlan(plan);
 pendingPool = { ...pendingPool, poolNft: plan.poolNft, assetLq: plan.assetLq, assetY: plan.assetY };
 state = { ...state, pendingPool };
@@ -113,25 +96,8 @@ if (existingPool) {
   Deno.exit(0);
 }
 
-const assets: Record<string, bigint> = {
-  lovelace: plan.initialLovelace,
-  [plan.assetY]: plan.initialTokenAmount,
-  [plan.poolNft]: 1n,
-  [plan.assetLq]: plan.depositedLq,
-};
-
-const tx = await lucid
-  .newTx()
-  .attach.Script(nativePolicy)
-  .mintAssets({
-    [plan.assetY]: plan.initialTokenAmount,
-    [plan.poolNft]: 1n,
-    [plan.assetLq]: plan.depositedLq,
-  }, Data.to(0n))
-  .pay.ToAddressWithData(poolAddress, { kind: "inline", value: plan.datum }, assets)
-  .addSignerKey(paymentCred.hash)
-  .complete();
-const txHash = await submitSignedTx(await tx.sign.withWallet().complete());
+const signed = await signedPoolTx();
+const txHash = await submitSignedTx(signed);
 const outputRef = await waitFor("created Royalty V1 pool output", async () => {
   const utxos = await lucid.utxosAt(poolAddress);
   const found = utxos.find((utxo) => utxo.txHash === txHash && utxo.assets[plan.poolNft] === 1n);
@@ -155,6 +121,79 @@ const finalState = {
 delete finalState.pendingPool;
 await saveState(config.statePath, finalState);
 console.log(`Created Royalty V1 pool at ${outputRef.txHash}#${outputRef.outputIndex}`);
+
+type PendingPool = NonNullable<PreprodE2eState["pendingPool"]>;
+
+function newPendingPool(validatorName: PoolValidator): PendingPool {
+  const suffix = randomHex(8);
+  return {
+    validator: validatorName,
+    poolNftNameHex: `${POOL_NFT_NAME_PREFIX_HEX}${suffix}`,
+    lqTokenNameHex: `${LQ_TOKEN_NAME_PREFIX_HEX}${suffix}`,
+    testTokenNameHex: `${TEST_TOKEN_NAME_PREFIX_HEX}${suffix}`,
+  };
+}
+
+function planPendingPool(pool: PendingPool) {
+  return planRoyaltyPool(config.deployment, tokenPolicyId, lqPolicyId, {
+    initialLovelace: config.poolInitialLovelace,
+    initialTokenAmount: config.poolInitialTokenAmount,
+    poolNftNameHex: pool.poolNftNameHex,
+    lqTokenNameHex: pool.lqTokenNameHex,
+    testTokenNameHex: pool.testTokenNameHex,
+    adminScriptHash: config.deployment[validator].hash,
+    treasuryScriptHash: config.deployment[validator].hash,
+    royaltyPubKeyHex: paymentCred.hash.padEnd(64, "0").slice(0, 64),
+  });
+}
+
+async function signedPoolTx() {
+  const maxCandidates = Number(Deno.env.get("POOL_TX_HASH_MAX_CANDIDATES") ?? "512");
+  for (let attempt = 0; attempt < maxCandidates; attempt++) {
+    const candidate = attempt === 0 ? pendingPool : newPendingPool(validator);
+    const candidatePlan = planPendingPool(candidate);
+    validateRoyaltyPoolPlan(candidatePlan);
+    const candidateAssets: Record<string, bigint> = {
+      lovelace: candidatePlan.initialLovelace,
+      [candidatePlan.assetY]: candidatePlan.initialTokenAmount,
+      [candidatePlan.poolNft]: 1n,
+      [candidatePlan.assetLq]: candidatePlan.depositedLq,
+    };
+    const tx = await lucid
+      .newTx()
+      .attach.Script(nativePolicy)
+      .mintAssets({
+        [candidatePlan.assetY]: candidatePlan.initialTokenAmount,
+        [candidatePlan.poolNft]: 1n,
+        [candidatePlan.assetLq]: candidatePlan.depositedLq,
+      }, Data.to(0n))
+      .pay.ToAddressWithData(poolAddress, { kind: "inline", value: candidatePlan.datum }, candidateAssets)
+      .addSignerKey(paymentCred.hash)
+      .complete();
+    const candidateSigned = await tx.sign.withWallet().complete();
+    const candidateTxHash = candidateSigned.toHash();
+    if (!minPoolTxHash || minPoolTxHash < candidateTxHash) {
+      if (attempt > 0 || minPoolTxHash) {
+        console.log(`selected_pool_tx_hash=${candidateTxHash}`);
+        console.log(`searched_pool_candidates=${attempt + 1}`);
+      }
+      pendingPool = {
+        ...candidate,
+        poolNft: candidatePlan.poolNft,
+        assetLq: candidatePlan.assetLq,
+        assetY: candidatePlan.assetY,
+      };
+      plan = candidatePlan;
+      state = { ...state, pendingPool };
+      await saveState(config.statePath, state);
+      return candidateSigned;
+    }
+    if (attempt % 32 === 31) {
+      console.log(`searched_pool_candidates=${attempt + 1}`);
+    }
+  }
+  throw new Error(`No pool tx hash found after ${maxCandidates} candidates above ${minPoolTxHash}`);
+}
 
 function randomHex(bytes: number): string {
   const data = new Uint8Array(bytes);

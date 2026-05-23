@@ -17,19 +17,32 @@ import { waitFor } from "./src/wait.ts";
 
 const dryRun = Deno.args.includes("--dry-run");
 const force = Deno.args.includes("--force");
+const createOnly = Deno.args.includes("--create-only");
+const bindOnly = Deno.args.includes("--bind-only");
+
+if (createOnly && bindOnly) {
+  throw new Error("--create-only and --bind-only are mutually exclusive");
+}
 
 const config = await loadConfig();
 let state = await loadState(config.statePath);
 const entitlement = requireBatchWitnessEntitlement(state, config.deployment.alephBatchWitness.hash);
 
 if (state.account && !force) {
-  state = { ...state, pendingAccount: state.account };
+  const account = state.account;
+  state = { ...state, pendingAccount: account };
+  state = attachAccountOutputRefToEntitlement(state, account.outputRef);
   delete state.account;
 }
 
 let pending = force ? undefined : state.pendingAccount;
+if (bindOnly && !pending) {
+  throw new Error("No pending account to bind; run without --bind-only first");
+}
 if (!pending) {
-  const hotPrivateKeyHex = force ? randomHotPrivateKeyHex() : config.accountHotPrivateKeyHex ?? randomHotPrivateKeyHex();
+  const hotPrivateKeyHex = force
+    ? randomHotPrivateKeyHex()
+    : config.accountHotPrivateKeyHex ?? randomHotPrivateKeyHex();
   const mainKeyHex = deriveCompressedPublicKey(hotPrivateKeyHex);
   pending = {
     alephAbi: "current",
@@ -81,10 +94,19 @@ if (!pending.outputRef) {
   });
   console.log(`Observed Aleph account output ${outputRef.txHash}#${outputRef.outputIndex}`);
   pending = { ...pending, outputRef };
-  if (!force) {
+  if (!force || createOnly) {
     state = attachAccountOutputRefToEntitlement({ ...state, pendingAccount: pending }, outputRef);
     await saveState(config.statePath, state);
   }
+}
+
+if (createOnly) {
+  console.log(
+    `Created Aleph account ${pending.accountId} at ${(pending.outputRef as OutputRef).txHash}#${
+      (pending.outputRef as OutputRef).outputIndex
+    }`,
+  );
+  Deno.exit(0);
 }
 
 console.log(`Binding Aleph account ${pending.accountId} to agent`);

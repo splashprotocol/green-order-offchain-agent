@@ -7,7 +7,7 @@ Deno.test("partial preflight selects a nonzero strict partial fill using Rust po
     poolTokenReserve: 40_000_000n,
     poolAssetY: "01".repeat(28) + "74657374",
     leavingLovelace: 20_000_000n,
-    expectedTokenAmount: 15_000_000n,
+    expectedTokenAmount: 14_900_000n,
     feeLovelace: 2_000_000n,
   });
 
@@ -15,7 +15,7 @@ Deno.test("partial preflight selects a nonzero strict partial fill using Rust po
   if (plan.receivedOutput <= 0n) throw new Error("expected positive received output");
   if (plan.remainingLeaving <= 0n) throw new Error("expected strict partial remainder");
   assertEquals(plan.consumedLeaving + plan.remainingLeaving, 20_000_000n);
-  assertEquals(plan.receivedOutput + plan.remainingExpectedOutput, 15_000_000n);
+  assertEquals(plan.receivedOutput + plan.remainingExpectedOutput, 14_900_000n);
   assertEquals(plan.remainingFee, plan.remainingLeaving * 2_000_000n / 20_000_000n);
 });
 

@@ -12,14 +12,14 @@ Deno.test("loadConfig reads partial smoke env overrides", async () => {
   const previous = snapshotEnv(ENV_KEYS);
   try {
     Deno.env.set("PARTIAL_LEAVING_LOVELACE", "20000000");
-    Deno.env.set("PARTIAL_EXPECTED_TOKEN_AMOUNT", "15000000");
+    Deno.env.set("PARTIAL_EXPECTED_TOKEN_AMOUNT", "14900000");
     Deno.env.set("PARTIAL_FEE_LOVELACE", "2000000");
     Deno.env.set("PARTIAL_EXECUTION_TIMEOUT_MS", "900000");
 
     const config = await loadConfig();
 
     assertEquals(config.partialLeavingLovelace, 20_000_000n);
-    assertEquals(config.partialExpectedTokenAmount, 15_000_000n);
+    assertEquals(config.partialExpectedTokenAmount, 14_900_000n);
     assertEquals(config.partialFeeLovelace, 2_000_000n);
     assertEquals(config.partialExecutionTimeoutMs, 900_000);
   } finally {

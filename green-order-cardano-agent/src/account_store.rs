@@ -485,6 +485,76 @@ mod tests {
     }
 
     #[test]
+    fn completes_current_live_preprod_partial_residual_leaf() {
+        let mut store = AccountStore::empty();
+        let residual = AlephIntention {
+            abi: AlephAccountAbi::Current,
+            target_nonce_index: 0,
+            target_nonce_value: 1,
+            leaving_asset: AssetClass::Native,
+            leaving_amount: 8_737_805,
+            arriving_asset: AssetClass::Token(Token(
+                PolicyId::from_hex("aaf945ecdbe9256312f8d90bdd7cd904f558e9be2cf7aa92c4c2bf19").unwrap(),
+                AssetName::new(hex::decode("677265656eae01a1426901f50f").unwrap())
+                    .unwrap()
+                    .into(),
+            )),
+            expected_arriving_amount: 6_509_665,
+            fee_lovelace: 873_780,
+            operator: hex::decode("cd52b4976906bfe539d5c8cc6d8101f3648c924bd58f3ffed43f46e9")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        };
+        let key = residual.intent_key();
+        let digest = residual.digest();
+        store
+            .insert_remaining(key.clone(), order_id(26), residual)
+            .unwrap();
+        let root = store.root();
+
+        store.mark_completed(key.clone(), digest).unwrap();
+
+        assert_eq!(store.root(), root);
+        assert!(store.pending_leaf(&key).is_none());
+    }
+
+    #[test]
+    fn completes_current_live_preprod_partial_residual_leaf_from_catalyst_run() {
+        let mut store = AccountStore::empty();
+        let residual = AlephIntention {
+            abi: AlephAccountAbi::Current,
+            target_nonce_index: 0,
+            target_nonce_value: 1,
+            leaving_asset: AssetClass::Native,
+            leaving_amount: 8_737_805,
+            arriving_asset: AssetClass::Token(Token(
+                PolicyId::from_hex("aaf945ecdbe9256312f8d90bdd7cd904f558e9be2cf7aa92c4c2bf19").unwrap(),
+                AssetName::new(hex::decode("677265656ed86e69a25afea2b3").unwrap())
+                    .unwrap()
+                    .into(),
+            )),
+            expected_arriving_amount: 6_509_665,
+            fee_lovelace: 873_780,
+            operator: hex::decode("cd52b4976906bfe539d5c8cc6d8101f3648c924bd58f3ffed43f46e9")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        };
+        let key = residual.intent_key();
+        let digest = residual.digest();
+        store
+            .insert_remaining(key.clone(), order_id(27), residual)
+            .unwrap();
+        let root = store.root();
+
+        store.mark_completed(key.clone(), digest).unwrap();
+
+        assert_eq!(store.root(), root);
+        assert!(store.pending_leaf(&key).is_none());
+    }
+
+    #[test]
     fn account_store_root_matches_mpf_trie_for_pending_and_completed_leaves() {
         let mut store = AccountStore::empty();
         store

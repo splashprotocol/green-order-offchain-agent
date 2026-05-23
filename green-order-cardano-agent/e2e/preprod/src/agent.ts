@@ -38,11 +38,20 @@ export async function submitIntent(agentUrl: string, payload: unknown): Promise<
 }
 
 async function postJson(url: string, payload: unknown): Promise<unknown> {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  const timeoutMs = Number(Deno.env.get("AGENT_HTTP_TIMEOUT_MS") ?? "60000");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(`timed out after ${timeoutMs}ms`), timeoutMs);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     const reason = typeof body?.reason === "string" ? body.reason : "unknown";

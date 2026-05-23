@@ -135,6 +135,10 @@ It calls existing numbered preprod scripts with run-local state:
 - `01-create-royalty-v1-pool.ts`;
 - `08-create-separator-funding.ts`.
 
+The wrapper starts the agent before this phase because
+`03-create-aleph-account-and-bind.ts` binds the newly created account through
+the agent HTTP API.
+
 Outputs are captured in `logs/bootstrap.log` and the E2E state file.
 
 ### `demo/lib/agent.sh`
@@ -147,6 +151,9 @@ Responsibilities:
 - place chain-sync DB under the run directory;
 - start `green-order-cardano-agent`;
 - wait for the health endpoint;
+- after bootstrap, verify `/accounts/status` can see the account output;
+- verify the pool output ref is live on Koios and the agent chain sync has
+  reached tip before smoke submission;
 - capture logs under `logs/agent.log`;
 - stop the agent on exit.
 
@@ -230,5 +237,6 @@ For audit reproduction without spending:
 ./demo/catalyst-demo.sh --report-only --run-id <run-id>
 ```
 
-This mode is read-only except for regenerating `demo-report.md`. It must not
-start the agent, submit transactions, or modify checkpoints.
+This mode is read-only except for regenerating `demo-report.md`. It validates
+recorded transaction hashes against Koios preprod, and it must not start the
+agent, submit transactions, or modify checkpoints.

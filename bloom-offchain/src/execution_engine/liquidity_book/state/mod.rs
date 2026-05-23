@@ -675,13 +675,34 @@ where
     M: MarketMaker + Stable,
 {
     let AvailableLiquidity { input, output } = maker.available_liquidity_on_side(side.wrap(price))?;
-    let absolute_price = maker
+    let mut absolute_price = maker
         .effective_price(taker, side.wrap(input))
         .or_else(|| match side {
             Side::Bid => AbsolutePrice::new(input, output),
             Side::Ask => AbsolutePrice::new(output, input),
         })?;
-    if input > 0 && input <= demand {
+    let mut input = input;
+    if input > 0 && input <= demand && !side.wrap(price).overlaps(absolute_price) {
+        let mut low = 0;
+        let mut high = input;
+        let mut best = None;
+        while low < high {
+            let candidate = low + (high - low + 1) / 2;
+            match maker.effective_price(taker, side.wrap(candidate)) {
+                Some(candidate_price) if side.wrap(price).overlaps(candidate_price) => {
+                    best = Some((candidate, candidate_price));
+                    low = candidate;
+                }
+                _ => {
+                    high = candidate - 1;
+                }
+            }
+        }
+        let (adjusted_input, adjusted_price) = best?;
+        input = adjusted_input;
+        absolute_price = adjusted_price;
+    }
+    if input > 0 && input <= demand && side.wrap(price).overlaps(absolute_price) {
         return Some((
             maker.stable_id(),
             FillPreview {
@@ -1374,6 +1395,29 @@ pub mod tests {
     }
 
     #[test]
+    fn optimized_market_maker_preview_backs_off_rounding_boundary() {
+        let price = AbsolutePrice::new_unsafe(74, 100);
+        let taker = SimpleOrderPF::new(Side::Ask, 20_000_000, price, 0, 0);
+        let pool = RoundingCFMMPool {
+            pool_id: StableId::random(),
+            reserves_base: 40_000_000,
+            reserves_quote: 40_000_000,
+            max_input: 14_054_055,
+        };
+
+        let boundary_price = pool
+            .effective_price(&taker, taker.side().wrap(pool.max_input))
+            .unwrap();
+        assert!(!taker.side().wrap(price).overlaps(boundary_price));
+
+        let (_, preview) =
+            super::try_optimized_swap(&taker, price, taker.input(), taker.side(), &pool).unwrap();
+
+        assert!(preview.input < pool.max_input);
+        assert!(taker.side().wrap(price).overlaps(preview.price));
+    }
+
+    #[test]
     fn add_inactive_fragment() {
         let time_now = 1000u64;
         let ord = SimpleOrderPF::default_with_bounds(TimeBounds::After(time_now + 100));
@@ -1945,6 +1989,110 @@ pub mod tests {
 
         fn is_active(&self) -> bool {
             // SimpleCFMMPool used only for tests
+            true
+        }
+    }
+
+    #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+    pub struct RoundingCFMMPool {
+        pub pool_id: StableId,
+        pub reserves_base: u64,
+        pub reserves_quote: u64,
+        pub max_input: u64,
+    }
+
+    impl Display for RoundingCFMMPool {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.write_str("RoundingCFMMPool")
+        }
+    }
+
+    impl Debug for RoundingCFMMPool {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&*self.to_string())
+        }
+    }
+
+    impl Stable for RoundingCFMMPool {
+        type StableId = StableId;
+        fn stable_id(&self) -> Self::StableId {
+            self.pool_id
+        }
+        fn is_quasi_permanent(&self) -> bool {
+            true
+        }
+    }
+
+    impl MakerBehavior for RoundingCFMMPool {
+        fn swap(self, _: OnSide<u64>) -> Next<Self, Void> {
+            Next::Succ(self)
+        }
+    }
+
+    impl MarketMaker for RoundingCFMMPool {
+        type U = u64;
+
+        fn static_price(&self) -> SpotPrice {
+            AbsolutePrice::new_unsafe(self.reserves_quote, self.reserves_base).into()
+        }
+
+        fn real_price(&self, input: OnSide<u64>) -> Option<AbsolutePrice> {
+            match input {
+                OnSide::Ask(base_input) => {
+                    let quote_output = ((self.reserves_quote as u128) * (base_input as u128)
+                        / ((self.reserves_base as u128) + (base_input as u128)))
+                        as u64;
+                    AbsolutePrice::new(quote_output, base_input)
+                }
+                OnSide::Bid(quote_input) => {
+                    let base_output = ((self.reserves_base as u128) * (quote_input as u128)
+                        / ((self.reserves_quote as u128) + (quote_input as u128)))
+                        as u64;
+                    AbsolutePrice::new(quote_input, base_output)
+                }
+            }
+        }
+
+        fn quality(&self) -> PoolQuality {
+            PoolQuality::from(0u128)
+        }
+
+        fn liquidity(&self) -> AbsoluteReserves {
+            AbsoluteReserves {
+                base: self.reserves_base,
+                quote: self.reserves_quote,
+            }
+        }
+
+        fn available_liquidity_on_side(&self, _: OnSide<AbsolutePrice>) -> Option<AvailableLiquidity> {
+            Some(AvailableLiquidity {
+                input: self.max_input,
+                output: 0,
+            })
+        }
+
+        fn estimated_trade(&self, input: OnSide<u64>) -> Option<AvailableLiquidity> {
+            match input {
+                OnSide::Ask(base_input) => Some(AvailableLiquidity {
+                    input: base_input,
+                    output: ((self.reserves_quote as u128) * (base_input as u128)
+                        / ((self.reserves_base as u128) + (base_input as u128)))
+                        as u64,
+                }),
+                OnSide::Bid(quote_input) => Some(AvailableLiquidity {
+                    input: quote_input,
+                    output: ((self.reserves_base as u128) * (quote_input as u128)
+                        / ((self.reserves_quote as u128) + (quote_input as u128)))
+                        as u64,
+                }),
+            }
+        }
+
+        fn marginal_cost_hint(&self) -> Self::U {
+            10
+        }
+
+        fn is_active(&self) -> bool {
             true
         }
     }

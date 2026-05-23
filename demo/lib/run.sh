@@ -107,3 +107,18 @@ demo_checkpoint_is_done() {
   local name="$1"
   [[ "$(jq -r --arg name "$name" '.[$name].status // ""' "$DEMO_CHECKPOINTS_FILE")" == "done" ]]
 }
+
+demo_checkpoint_set_value() {
+  local name="$1"
+  local value="$2"
+  mkdir -p "$(dirname "$DEMO_CHECKPOINTS_FILE")"
+  local tmp="${DEMO_CHECKPOINTS_FILE}.tmp"
+  jq --arg name "$name" --arg value "$value" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '.[$name] = {"status":"done","value":$value,"at":$at}' "$DEMO_CHECKPOINTS_FILE" >"$tmp"
+  mv "$tmp" "$DEMO_CHECKPOINTS_FILE"
+}
+
+demo_checkpoint_value() {
+  local name="$1"
+  jq -r --arg name "$name" '.[$name].value // ""' "$DEMO_CHECKPOINTS_FILE"
+}

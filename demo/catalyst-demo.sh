@@ -38,9 +38,28 @@ demo_main() {
   demo_prepare_wallets
   demo_wait_for_funding
   demo_prepare_funding_boxes
-  demo_bootstrap_onchain
+  demo_prepare_account_onchain
+  if demo_partial_smoke_has_execution_tx; then
+    demo_run_smoke_phases
+    demo_verify_execution_results
+    demo_generate_report "PASS"
+    echo
+    echo "Catalyst Demo Summary"
+    echo "Run: $DEMO_RUN_ID"
+    echo "Network: preprod"
+    demo_print_tx_summary
+    echo "Report: $DEMO_REPORT_FILE"
+    echo "Result: PASS"
+    return 0
+  fi
   demo_start_agent
+  demo_wait_for_agent_health
+  demo_wait_for_account_observed
+  demo_bind_account_onchain
   demo_wait_for_indexer_ready
+  demo_prepare_pool_onchain
+  demo_mark_post_bootstrap_log_position
+  demo_wait_for_pool_ready
   demo_run_smoke_phases
   demo_verify_execution_results
   demo_generate_report "PASS"

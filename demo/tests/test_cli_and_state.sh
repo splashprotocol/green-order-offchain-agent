@@ -13,6 +13,18 @@ help_output="$(bash "$repo_root/demo/catalyst-demo.sh" --help)"
 [[ "$help_output" == *"--run-id"* ]]
 
 source "$repo_root/demo/lib/run.sh"
+source "$repo_root/demo/lib/env.sh"
+source "$repo_root/demo/lib/agent.sh"
+
+CARDANO_NETWORK=preprod demo_refuse_unsafe_network
+if CARDANO_NETWORK=mainnet demo_refuse_unsafe_network 2>/dev/null; then
+  echo "expected mainnet to be rejected" >&2
+  exit 1
+fi
+if CARDANO_NETWORK=preview demo_refuse_unsafe_network 2>/dev/null; then
+  echo "expected preview to be rejected" >&2
+  exit 1
+fi
 
 DEMO_STATE_ROOT="$tmp_dir/runs"
 demo_parse_args --fresh
@@ -36,3 +48,12 @@ demo_parse_args --run-id "$DEMO_RUN_ID"
 demo_init_run
 [[ "$DEMO_MODE" == "reuse" ]]
 [[ -f "$DEMO_RUN_DIR/wallets/existing.key" ]]
+
+export DEMO_CHAIN_SYNC_LOOKBACK_SECONDS=777
+rm -rf "$DEMO_RUN_DIR/agent-chain-sync" "$DEMO_RUN_DIR/agent-chain-sync.green-account-stores.json"
+mkdir -p "$DEMO_RUN_DIR/agent-chain-sync"
+touch "$DEMO_RUN_DIR/agent-chain-sync.green-account-stores.json"
+lookback="$(demo_partial_chain_sync_lookback_seconds)"
+[[ "$lookback" == "777" ]]
+[[ ! -e "$DEMO_RUN_DIR/agent-chain-sync" ]]
+[[ ! -e "$DEMO_RUN_DIR/agent-chain-sync.green-account-stores.json" ]]

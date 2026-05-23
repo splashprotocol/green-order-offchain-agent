@@ -8,6 +8,7 @@ trap 'rm -rf "$tmp_dir"' EXIT
 REPO_ROOT="$repo_root"
 source "$repo_root/demo/lib/run.sh"
 source "$repo_root/demo/lib/report.sh"
+source "$repo_root/demo/lib/verify.sh"
 
 DEMO_STATE_ROOT="$tmp_dir/runs"
 demo_parse_args --fresh
@@ -38,6 +39,7 @@ cat >"$DEMO_STATE_FILE" <<JSON
 JSON
 
 demo_generate_report "REPORT ONLY"
+DEMO_SKIP_REPORT_VALIDATION=1 demo_validate_report_only_inputs
 
 [[ -f "$DEMO_REPORT_FILE" ]]
 grep -q "REPORT ONLY" "$DEMO_REPORT_FILE"

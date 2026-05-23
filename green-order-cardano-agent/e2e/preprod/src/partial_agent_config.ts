@@ -41,7 +41,11 @@ export async function createPartialAgentConfig(
 ): Promise<PartialAgentConfigResult> {
   const repoRoot = options.repoRoot ?? await findRepoRoot();
   const config = structuredClone(original);
-  config.greenOrders = { ...(config.greenOrders ?? {}), allowPartial: true };
+  config.greenOrders = {
+    ...(config.greenOrders ?? {}),
+    allowPartial: true,
+    autoSubmitContinuations: false,
+  };
   config.chainSync = { ...(config.chainSync ?? {}) };
   config.chainSync.dbPath = absolutePartialDbPath(config.chainSync.dbPath, repoRoot, options.partialDbPath);
   if (options.chainSyncPoint) {

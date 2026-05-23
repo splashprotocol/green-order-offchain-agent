@@ -259,7 +259,7 @@ async fn main() {
                 .expect("green HTTP intent source failed");
         });
     }
-    if config.green_orders.allow_partial {
+    if config.green_orders.allow_partial && config.green_orders.auto_submit_continuations {
         tokio::spawn(run_continuation_scanner(
             Arc::clone(&account_index),
             intent_pair_upd_snd,
