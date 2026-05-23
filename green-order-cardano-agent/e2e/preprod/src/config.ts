@@ -43,6 +43,7 @@ export async function loadConfig(): Promise<PreprodE2eConfig> {
   await loadDotEnv(".env");
   await loadDotEnv(".env.operator");
   await loadDotEnv(".env.wallets");
+  await loadDotEnvFromEnvPath("WALLET_ENV_PATH");
   const deploymentPath = env("DEPLOYMENT_PATH", "../../resources/preprod.deployment.json");
   const deployment = JSON.parse(await Deno.readTextFile(deploymentPath)) as Deployment;
   const agentConfigPath = env("AGENT_CONFIG_PATH", "../../resources/preprod.config.json");
@@ -102,19 +103,26 @@ async function operatorKeyHashFromAgentConfig(agentConfigPath: string): Promise<
   return hash;
 }
 
-async function loadDotEnv(path: string): Promise<void> {
+async function loadDotEnv(path: string, options: { override?: boolean } = {}): Promise<void> {
   try {
     const text = await Deno.readTextFile(path);
     for (const line of text.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
       const [name, ...rest] = trimmed.split("=");
-      if (!Deno.env.get(name)) {
+      if (options.override || !Deno.env.get(name)) {
         Deno.env.set(name, rest.join("="));
       }
     }
   } catch (error) {
     if (!(error instanceof Deno.errors.NotFound)) throw error;
+  }
+}
+
+async function loadDotEnvFromEnvPath(name: string): Promise<void> {
+  const path = Deno.env.get(name)?.trim();
+  if (path) {
+    await loadDotEnv(path, { override: true });
   }
 }
 

@@ -2,6 +2,8 @@ import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/asser
 import { loadConfig } from "../src/config.ts";
 
 const ENV_KEYS = [
+  "FUNDED_WALLET_SEED",
+  "WALLET_ENV_PATH",
   "PARTIAL_LEAVING_LOVELACE",
   "PARTIAL_EXPECTED_TOKEN_AMOUNT",
   "PARTIAL_FEE_LOVELACE",
@@ -23,6 +25,23 @@ Deno.test("loadConfig reads partial smoke env overrides", async () => {
     assertEquals(config.partialFeeLovelace, 2_000_000n);
     assertEquals(config.partialExecutionTimeoutMs, 900_000);
   } finally {
+    restoreEnv(previous);
+  }
+});
+
+Deno.test("loadConfig reads generated wallet env from WALLET_ENV_PATH", async () => {
+  const previous = snapshotEnv(ENV_KEYS);
+  const walletEnvPath = await Deno.makeTempFile({ prefix: "wallets-", suffix: ".env" });
+  try {
+    Deno.env.delete("FUNDED_WALLET_SEED");
+    Deno.env.set("WALLET_ENV_PATH", walletEnvPath);
+    await Deno.writeTextFile(walletEnvPath, "FUNDED_WALLET_SEED=fresh generated seed phrase\n");
+
+    const config = await loadConfig();
+
+    assertEquals(config.fundedWalletSeed, "fresh generated seed phrase");
+  } finally {
+    await Deno.remove(walletEnvPath).catch(() => {});
     restoreEnv(previous);
   }
 });

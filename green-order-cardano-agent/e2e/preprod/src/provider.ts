@@ -1,13 +1,13 @@
 import { Blockfrost, Koios, Provider } from "npm:@lucid-evolution/lucid@0.3.53";
 
-export async function loadDotEnv(path: string): Promise<void> {
+export async function loadDotEnv(path: string, options: { override?: boolean } = {}): Promise<void> {
   try {
     const text = await Deno.readTextFile(path);
     for (const line of text.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
       const [name, ...rest] = trimmed.split("=");
-      if (!Deno.env.get(name)) {
+      if (options.override || !Deno.env.get(name)) {
         Deno.env.set(name, rest.join("="));
       }
     }
@@ -19,12 +19,21 @@ export async function loadDotEnv(path: string): Promise<void> {
 export async function loadPreprodEnv(): Promise<void> {
   await loadDotEnv(".env");
   await loadDotEnv(".env.wallets");
+  await loadDotEnvFromEnvPath("WALLET_ENV_PATH");
+}
+
+async function loadDotEnvFromEnvPath(name: string): Promise<void> {
+  const path = Deno.env.get(name)?.trim();
+  if (path) {
+    await loadDotEnv(path, { override: true });
+  }
 }
 
 export function preprodProvider(): Provider {
   const blockfrostProjectId = Deno.env.get("BLOCKFROST_PROJECT_ID")?.trim();
   if (blockfrostProjectId) {
-    const url = Deno.env.get("BLOCKFROST_PREPROD_URL")?.trim() ?? "https://cardano-preprod.blockfrost.io/api/v0";
+    const url = Deno.env.get("BLOCKFROST_PREPROD_URL")?.trim() ??
+      "https://cardano-preprod.blockfrost.io/api/v0";
     return new Blockfrost(url, blockfrostProjectId);
   }
   return new Koios(Deno.env.get("KOIOS_PREPROD_URL")?.trim() ?? "https://preprod.koios.rest/api/v1");
