@@ -525,6 +525,10 @@ where
                 to_transition(state_before_update, state_after_update)
             }
             Transition::Forward(Ior::Left(st)) | Transition::Backward(Ior::Left(st)) => {
+                if from_ledger && st.is_quasi_permanent() {
+                    self.index.put_fallback(st);
+                    return None;
+                }
                 if from_ledger || !st.is_quasi_permanent() {
                     self.index.eliminate(st.stable_id());
                 }
@@ -1074,7 +1078,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::execution_engine::storage::{InMemoryStateIndex, StateIndex};
+    use spectrum_cardano_lib::{OutputRef, Token};
     use std::collections::{BTreeSet, HashSet};
+    use std::fmt::{Display, Formatter};
     use type_equalities::IsEqual;
 
     #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -1087,6 +1094,119 @@ mod tests {
         fn select<U: IsEqual<TestRef>>(&self) -> TestRef {
             self.0
         }
+    }
+
+    #[derive(Clone, Debug)]
+    struct TestEntity {
+        stable_id: Token,
+        version: OutputRef,
+        quasi_permanent: bool,
+    }
+
+    impl Display for TestEntity {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.write_fmt(format_args!("TestEntity({})", self.version))
+        }
+    }
+
+    impl Stable for TestEntity {
+        type StableId = Token;
+
+        fn stable_id(&self) -> Self::StableId {
+            self.stable_id
+        }
+
+        fn is_quasi_permanent(&self) -> bool {
+            self.quasi_permanent
+        }
+    }
+
+    impl EntitySnapshot for TestEntity {
+        type Version = OutputRef;
+
+        fn version(&self) -> Self::Version {
+            self.version
+        }
+    }
+
+    fn test_token() -> Token {
+        Token::from_string_unsafe("42019269344f20974cc563179e392a78dd3a3e9fe90adf30322abf8d.1af7822454e4e3286b8c59c3adbed84a7e4aa9467ae9741807d24de501ed48c2")
+    }
+
+    fn test_ref(index: u64) -> OutputRef {
+        OutputRef::from_string_unsafe(
+            format!(
+                "9bdfa9a985ed742d70fe896868c50e97be3c8759b90d3c7f979e5becb75f8d86#{}",
+                index
+            )
+            .as_str(),
+        )
+    }
+
+    #[test]
+    fn ledger_spend_of_quasi_permanent_entity_keeps_fallback_without_book_transition() {
+        let stable_id = test_token();
+        let version = test_ref(0);
+        let entity = Bundled(
+            TestEntity {
+                stable_id,
+                version,
+                quasi_permanent: true,
+            },
+            TestBearer(TestRef(0)),
+        );
+        let (feedback_tx, feedback_rx) = mpsc::channel(1);
+        drop(feedback_tx);
+        let (health_tx, _health_rx) = mpsc::unbounded();
+        let mut engine: Executor<
+            futures::stream::Empty<()>,
+            futures::stream::Empty<()>,
+            TestRef,
+            Token,
+            OutputRef,
+            TestEntity,
+            TestEntity,
+            TestEntity,
+            TestBearer,
+            (),
+            (),
+            (),
+            (),
+            (),
+            InMemoryStateIndex<Bundled<TestEntity, TestBearer>>,
+            (),
+            (),
+            (),
+            (),
+            (),
+            (),
+            (),
+            (),
+        > = Executor::new(
+            InMemoryStateIndex::new(),
+            MultiPair::new::<()>((), "test-book"),
+            MultiPair::new::<()>((), "test-backlog"),
+            (),
+            (),
+            (),
+            (),
+            futures::stream::empty(),
+            futures::stream::empty(),
+            feedback_rx,
+            Beacon::relaxed(true),
+            Beacon::relaxed(false),
+            0,
+            health_tx,
+        );
+
+        assert!(engine
+            .update_state(Channel::ledger(Transition::Forward(Ior::Right(entity.clone())), ()))
+            .is_some());
+
+        let transition = engine.update_state(Channel::ledger(Transition::Forward(Ior::Left(entity)), ()));
+
+        assert!(transition.is_none());
+        assert!(engine.index.get_fallback(stable_id).is_some());
     }
 
     #[test]
