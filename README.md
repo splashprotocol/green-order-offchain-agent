@@ -7,8 +7,6 @@ The target runtime keeps Spectrum ledger/mempool processing, funding, transactio
 submission, health, and Bloom execution infrastructure, while pruning unrelated
 agents, limit orders, broad pool families, and DAO workflows.
 
-Implementation plan: `docs/plans/2026-05-15-green-order-agent-fork-prune.md`.
-
 ## Green order ingress
 
 The agent observes Royalty V1 pools and Aleph account UTxOs from ledger/mempool
