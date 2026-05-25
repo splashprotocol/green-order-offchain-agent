@@ -17,6 +17,13 @@ funding, starts the agent, creates and binds the needed on-chain setup, runs the
 full-fill and partial-fill demos, verifies the residual continuation state, and
 writes a report.
 
+The full demo requires a running Cardano preprod node socket. Either export it
+before running or enter it when prompted:
+
+```bash
+export CARDANO_NODE_SOCKET_PATH="/absolute/path/to/node.socket"
+```
+
 Generated files are written under:
 
 ```text

@@ -56,6 +56,10 @@ export async function createPartialAgentConfig(
   };
   config.chainSync = { ...(config.chainSync ?? {}) };
   config.chainSync.dbPath = absolutePartialDbPath(config.chainSync.dbPath, repoRoot, options.partialDbPath);
+  const nodeSocketPath = Deno.env.get("CARDANO_NODE_SOCKET_PATH")?.trim();
+  if (nodeSocketPath) {
+    config.node = { ...(config.node ?? {}), path: nodeSocketPath };
+  }
   if (options.chainSyncPoint) {
     const point = { Specific: [options.chainSyncPoint.slot, options.chainSyncPoint.hash] };
     config.chainSync.startingPoint = point;

@@ -2,6 +2,8 @@ import { assert, assertEquals, assertStringIncludes } from "https://deno.land/st
 import { createPartialAgentConfig, recentChainSyncPoint } from "../src/partial_agent_config.ts";
 
 Deno.test("createPartialAgentConfig enables partial and writes absolute db path", async () => {
+  const previousSocketPath = Deno.env.get("CARDANO_NODE_SOCKET_PATH");
+  Deno.env.set("CARDANO_NODE_SOCKET_PATH", "/tmp/preprod-node.socket");
   const original = {
     chainSync: {
       dbPath: "green-order-cardano-agent/e2e/preprod/.state/agent-chain-sync-funding",
@@ -13,20 +15,26 @@ Deno.test("createPartialAgentConfig enables partial and writes absolute db path"
     node: { path: "socket", magic: 1 },
     networkId: 0,
   };
-  const out = await createPartialAgentConfig(original, {
-    repoRoot: "/repo",
-    outputPath: "/tmp/partial.json",
-    chainSyncPoint: { slot: 123, hash: "b".repeat(64) },
-  });
+  try {
+    const out = await createPartialAgentConfig(original, {
+      repoRoot: "/repo",
+      outputPath: "/tmp/partial.json",
+      chainSyncPoint: { slot: 123, hash: "b".repeat(64) },
+    });
 
-  assertEquals(out.config.greenOrders.allowPartial, true);
-  assert(out.config.chainSync.dbPath.startsWith("/repo/"));
-  assertStringIncludes(out.config.chainSync.dbPath, "green-order-cardano-agent/e2e/preprod/.state/");
-  assertEquals(out.accountStorePath, `${out.config.chainSync.dbPath}.green-account-stores.json`);
-  assertEquals(out.config.chainSync.startingPoint, { Specific: [123, "b".repeat(64)] });
-  assertEquals(out.config.chainSync.replayFromPoint, { Specific: [123, "b".repeat(64)] });
-  assertEquals(out.config.chainSync.disableRollbacksUntil, 123);
-  assertEquals(out.config.operatorKey, "operator");
+    assertEquals(out.config.greenOrders.allowPartial, true);
+    assert(out.config.chainSync.dbPath.startsWith("/repo/"));
+    assertStringIncludes(out.config.chainSync.dbPath, "green-order-cardano-agent/e2e/preprod/.state/");
+    assertEquals(out.accountStorePath, `${out.config.chainSync.dbPath}.green-account-stores.json`);
+    assertEquals(out.config.chainSync.startingPoint, { Specific: [123, "b".repeat(64)] });
+    assertEquals(out.config.chainSync.replayFromPoint, { Specific: [123, "b".repeat(64)] });
+    assertEquals(out.config.chainSync.disableRollbacksUntil, 123);
+    assertEquals(out.config.operatorKey, "operator");
+    assertEquals(out.config.node.path, "/tmp/preprod-node.socket");
+  } finally {
+    if (previousSocketPath === undefined) Deno.env.delete("CARDANO_NODE_SOCKET_PATH");
+    else Deno.env.set("CARDANO_NODE_SOCKET_PATH", previousSocketPath);
+  }
 });
 
 Deno.test("recentChainSyncPoint retries transient Koios 504 responses", async () => {

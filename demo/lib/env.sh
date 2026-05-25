@@ -19,6 +19,38 @@ demo_check_required_tools() {
   fi
 }
 
+demo_require_node_socket_path() {
+  local socket_path="${DEMO_NODE_SOCKET_PATH:-${CARDANO_NODE_SOCKET_PATH:-${NODE_SOCKET_PATH:-}}}"
+
+  if [[ -z "$socket_path" ]]; then
+    echo "Cardano node socket is required for the full Catalyst demo." >&2
+    echo "The script uses node-to-client chain-sync, mempool, and tx-submission clients." >&2
+    if [[ -t 0 ]]; then
+      printf 'Enter absolute preprod node.socket path: ' >&2
+      read -r socket_path
+    fi
+  fi
+
+  if [[ -z "$socket_path" ]]; then
+    echo "missing Cardano node socket path. Set CARDANO_NODE_SOCKET_PATH=/absolute/path/to/node.socket and rerun." >&2
+    return 1
+  fi
+  if [[ "$socket_path" != /* ]]; then
+    echo "Cardano node socket path must be absolute: $socket_path" >&2
+    return 1
+  fi
+  if [[ ! -S "$socket_path" ]]; then
+    echo "Cardano node socket does not exist or is not a Unix socket: $socket_path" >&2
+    echo "Start a preprod Cardano node and set CARDANO_NODE_SOCKET_PATH=/absolute/path/to/node.socket." >&2
+    return 1
+  fi
+
+  DEMO_NODE_SOCKET_PATH="$socket_path"
+  CARDANO_NODE_SOCKET_PATH="$socket_path"
+  export DEMO_NODE_SOCKET_PATH CARDANO_NODE_SOCKET_PATH
+  echo "node socket: $CARDANO_NODE_SOCKET_PATH"
+}
+
 demo_refuse_unsafe_network() {
   local network="${CARDANO_NETWORK:-${NETWORK:-preprod}}"
   local normalized

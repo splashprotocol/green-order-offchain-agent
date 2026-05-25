@@ -26,6 +26,21 @@ if CARDANO_NETWORK=preview demo_refuse_unsafe_network 2>/dev/null; then
   exit 1
 fi
 
+unset DEMO_NODE_SOCKET_PATH CARDANO_NODE_SOCKET_PATH NODE_SOCKET_PATH
+if demo_require_node_socket_path </dev/null 2>"$tmp_dir/missing-socket.err"; then
+  echo "expected missing node socket path to be rejected" >&2
+  exit 1
+fi
+grep -q "Set CARDANO_NODE_SOCKET_PATH" "$tmp_dir/missing-socket.err"
+
+DEMO_NODE_SOCKET_PATH=relative/node.socket
+if demo_require_node_socket_path 2>"$tmp_dir/relative-socket.err"; then
+  echo "expected relative node socket path to be rejected" >&2
+  exit 1
+fi
+grep -q "must be absolute" "$tmp_dir/relative-socket.err"
+unset DEMO_NODE_SOCKET_PATH
+
 DEMO_STATE_ROOT="$tmp_dir/runs"
 demo_parse_args --fresh
 demo_init_run

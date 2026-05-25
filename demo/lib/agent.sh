@@ -12,6 +12,7 @@ demo_start_agent() {
     cd "$DEMO_E2E_DIR"
     export PARTIAL_AGENT_DB_PATH="$DEMO_RUN_DIR/agent-chain-sync"
     export PARTIAL_CHAIN_SYNC_LOOKBACK_SECONDS="$lookback_seconds"
+    export CARDANO_NODE_SOCKET_PATH="${CARDANO_NODE_SOCKET_PATH:-${DEMO_NODE_SOCKET_PATH:-}}"
     deno run --no-lock --allow-net --allow-read --allow-write --allow-env \
       09-create-partial-agent-config.ts --out "$DEMO_AGENT_CONFIG_FILE"
   ) 2>&1 | tee "$DEMO_LOG_DIR/agent-config.log"

@@ -7,6 +7,7 @@ demo_bootstrap_env() {
   export FORCE_SEPARATOR_FUNDING=1
   export WALLET_STATE_PATH="$DEMO_WALLET_STATE_FILE"
   export WALLET_ENV_PATH="$DEMO_WALLET_ENV_FILE"
+  export CARDANO_NODE_SOCKET_PATH="${CARDANO_NODE_SOCKET_PATH:-${DEMO_NODE_SOCKET_PATH:-}}"
 }
 
 demo_prepare_account_onchain() {

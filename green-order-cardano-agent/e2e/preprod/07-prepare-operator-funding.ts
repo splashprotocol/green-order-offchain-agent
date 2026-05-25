@@ -110,7 +110,7 @@ async function writeAgentConfig(operatorKey: string): Promise<void> {
   const config = JSON.parse(await Deno.readTextFile(agentConfigPath));
   config.operatorKey = operatorKey;
   config.minOperatorFundingLovelace = Number(operatorFundingLovelace);
-  config.node = { ...config.node, path: "/Users/aleksandr/node-external/node.socket", magic: 1 };
+  config.node = { ...config.node, path: requiredEnv("CARDANO_NODE_SOCKET_PATH"), magic: 1 };
   config.networkId = 0;
   await Deno.writeTextFile(agentConfigPath, `${JSON.stringify(config, null, 2)}\n`);
   console.log(`Updated agent config ${agentConfigPath}`);

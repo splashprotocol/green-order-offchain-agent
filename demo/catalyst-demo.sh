@@ -35,6 +35,7 @@ demo_main() {
 
   demo_check_required_tools
   demo_refuse_unsafe_network
+  demo_require_node_socket_path
   demo_prepare_wallets
   demo_wait_for_funding
   demo_prepare_funding_boxes

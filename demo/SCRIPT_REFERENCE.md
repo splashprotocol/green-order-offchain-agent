@@ -23,6 +23,18 @@ Install and expose these tools on `PATH`:
 - `jq`
 - `curl`
 
+The full demo also requires a running Cardano preprod node with node-to-client
+socket access. Provide the socket path before running, or enter it when the
+script prompts:
+
+```bash
+export CARDANO_NODE_SOCKET_PATH="/absolute/path/to/node.socket"
+```
+
+The path must be absolute and must point to an existing Unix socket. The script
+uses this socket for chain-sync, mempool monitoring, and transaction
+submission.
+
 The demo is preprod-only. The wrapper refuses `CARDANO_NETWORK=mainnet` or
 `NETWORK=mainnet`.
 
@@ -49,15 +61,17 @@ export KOIOS_PREPROD_URL="https://preprod.koios.rest/api/v1"
 What happens:
 
 1. A new run id is created.
-2. New per-run wallets are generated.
-3. The script prints one funding address.
-4. The reviewer sends preprod tADA to that address.
-5. Funding boxes are prepared from that tADA.
-6. The Aleph account, entitlement, separator funding, and pool are created.
-7. The agent starts with a generated partial-fill-enabled config.
-8. A full-fill green-order smoke intent is submitted and verified.
-9. A partial-fill green-order smoke intent is submitted and verified.
-10. A report is written under the run directory.
+2. The preprod node socket path is read from `CARDANO_NODE_SOCKET_PATH` or
+   requested interactively.
+3. New per-run wallets are generated.
+4. The script prints one funding address.
+5. The reviewer sends preprod tADA to that address.
+6. Funding boxes are prepared from that tADA.
+7. The Aleph account, entitlement, separator funding, and pool are created.
+8. The agent starts with a generated partial-fill-enabled config.
+9. A full-fill green-order smoke intent is submitted and verified.
+10. A partial-fill green-order smoke intent is submitted and verified.
+11. A report is written under the run directory.
 
 Expected final output includes:
 
@@ -742,4 +756,3 @@ This validates recorded tx hashes through Koios and regenerates the report.
 8. Run report-only mode for the same run id.
 9. Confirm report-only mode completes without starting the agent or submitting
    transactions.
-
