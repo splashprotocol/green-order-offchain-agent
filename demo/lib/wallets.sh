@@ -26,7 +26,7 @@ demo_prepare_wallets() {
 }
 
 demo_wait_for_funding() {
-  local min_ada="${DEMO_MIN_FUNDING_ADA:-120}"
+  local min_ada="${DEMO_MIN_FUNDING_ADA:-400}"
   local address="${DEMO_FUNDING_ADDRESS:-}"
   if [[ -z "$address" && -f "$DEMO_WALLET_ENV_FILE" ]]; then
     address="$(grep '^BATCHER_ADDRESS=' "$DEMO_WALLET_ENV_FILE" | cut -d= -f2-)"
