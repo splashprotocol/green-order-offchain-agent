@@ -8,6 +8,14 @@ export type ChainSyncPoint = {
   hash: string;
 };
 
+type KoiosFetchFirst = (endpoint: string) => Promise<any>;
+
+type ChainSyncPointOptions = {
+  attempts?: number;
+  delayMs?: number;
+  fetchFirst?: KoiosFetchFirst;
+};
+
 export async function runPartialAgentConfigCli(args: string[] = Deno.args): Promise<void> {
   const outIndex = args.indexOf("--out");
   if (outIndex < 0 || !args[outIndex + 1]) {
@@ -92,25 +100,58 @@ async function findRepoRoot(): Promise<string> {
   }
 }
 
-async function recentChainSyncPoint(lookbackSeconds: number): Promise<ChainSyncPoint> {
+export async function recentChainSyncPoint(
+  lookbackSeconds: number,
+  options: ChainSyncPointOptions = {},
+): Promise<ChainSyncPoint> {
   if (!Number.isSafeInteger(lookbackSeconds) || lookbackSeconds < 0) {
     throw new Error(
       `PARTIAL_CHAIN_SYNC_LOOKBACK_SECONDS must be a non-negative integer, got ${lookbackSeconds}`,
     );
   }
-  const tip = await koiosGetFirst("tip");
+  const fetchFirst = options.fetchFirst ?? koiosGetFirst;
+  const tip = await fetchFirst("tip");
   const tipSlot = Number(tip?.abs_slot);
   if (!Number.isSafeInteger(tipSlot) || tipSlot <= 0) {
     throw new Error(`Koios tip response has invalid abs_slot: ${JSON.stringify(tip)}`);
   }
   const targetSlot = Math.max(0, tipSlot - lookbackSeconds);
-  const block = await koiosGetFirst(`blocks?abs_slot=lte.${targetSlot}&order=abs_slot.desc&limit=1`);
+  const block = await withRetries(
+    () => fetchFirst(`blocks?abs_slot=lte.${targetSlot}&order=abs_slot.desc&limit=1`),
+    {
+      description: "Koios recent block lookup",
+      attempts: options.attempts ?? 6,
+      delayMs: options.delayMs ?? 5_000,
+    },
+  );
   const slot = Number(block?.abs_slot);
   const hash = String(block?.hash ?? "");
   if (!Number.isSafeInteger(slot) || slot <= 0 || !/^[0-9a-f]{64}$/i.test(hash)) {
     throw new Error(`Koios blocks response has invalid chain point: ${JSON.stringify(block)}`);
   }
   return { slot, hash };
+}
+
+async function withRetries<T>(
+  operation: () => Promise<T>,
+  options: { description: string; attempts: number; delayMs: number },
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= options.attempts; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === options.attempts) break;
+      console.warn(
+        `${options.description} failed (${attempt}/${options.attempts}); retrying in ${options.delayMs}ms: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, options.delayMs));
+    }
+  }
+  throw lastError;
 }
 
 async function koiosGetFirst(endpoint: string): Promise<any> {
