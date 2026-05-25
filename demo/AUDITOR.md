@@ -35,6 +35,8 @@ Contents:
 - `wallets/`: generated wallet state and `.env.wallets`;
 - `config/`: generated agent config;
 - `logs/`: wallet, bootstrap, agent, and smoke logs;
+- `agent-chain-sync/`: run-local RocksDB chain-sync cache, reset before each agent start;
+- `agent-chain-sync.green-account-stores.json`: run-local account-store persistence, reset before each agent start;
 - `state.json`: demo wrapper state;
 - `checkpoints.json`: phase completion markers;
 - `preprod-green-order-e2e.json`: existing E2E state consumed by numbered scripts;

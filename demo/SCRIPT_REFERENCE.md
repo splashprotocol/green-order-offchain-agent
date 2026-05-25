@@ -157,8 +157,8 @@ Important files:
 | `logs/agent.log` | Runtime agent log. |
 | `logs/full-fill.log` | Full-fill smoke submission log. |
 | `logs/partial-fill.log` | Partial-fill smoke submission/recovery log. |
-| `agent-chain-sync/` | Run-local agent chain-sync database. |
-| `agent-chain-sync.green-account-stores.json` | Persisted account store snapshots. |
+| `agent-chain-sync/` | Run-local agent chain-sync RocksDB database. Deleted before each agent start so the demo indexes from an empty local DB. |
+| `agent-chain-sync.green-account-stores.json` | Persisted account store snapshots. Deleted before each agent start together with the RocksDB directory. |
 | `demo-report.md` | Final auditor report. |
 
 Generated wallet files contain testnet private material. They must not be
@@ -615,7 +615,8 @@ config/preprod-partial-agent.json
 Purpose:
 
 - enable partial-fill behavior;
-- isolate chain-sync DB and account-store persistence per run.
+- isolate chain-sync DB and account-store persistence per run;
+- start the agent from an empty run-local RocksDB directory and empty account-store persistence file.
 
 ### `09-deploy-royalty-v1-reference-script.ts`
 

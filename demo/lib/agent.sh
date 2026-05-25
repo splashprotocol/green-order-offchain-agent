@@ -38,8 +38,21 @@ demo_start_agent() {
 }
 
 demo_partial_chain_sync_lookback_seconds() {
-  rm -rf "$DEMO_RUN_DIR/agent-chain-sync" "$DEMO_RUN_DIR/agent-chain-sync.green-account-stores.json"
+  demo_reset_agent_persistence >&2
   printf '%s\n' "${PARTIAL_CHAIN_SYNC_LOOKBACK_SECONDS:-${DEMO_CHAIN_SYNC_LOOKBACK_SECONDS:-14400}}"
+}
+
+demo_reset_agent_persistence() {
+  local db_path="$DEMO_RUN_DIR/agent-chain-sync"
+  local account_store_path="$DEMO_RUN_DIR/agent-chain-sync.green-account-stores.json"
+
+  echo "agent: resetting run-local RocksDB and account-store persistence"
+  rm -rf "$db_path" "$account_store_path"
+
+  if [[ -e "$db_path" || -e "$account_store_path" ]]; then
+    echo "failed to reset agent persistence: $db_path or $account_store_path still exists" >&2
+    return 1
+  fi
 }
 
 demo_stop_agent() {
