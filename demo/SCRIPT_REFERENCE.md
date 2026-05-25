@@ -525,7 +525,9 @@ Inputs:
 - current account output;
 - current pool output;
 - agent URL;
-- green-order parameters.
+- green-order parameters. By default it swaps 1 ADA for at least 900,000 units
+  of the generated test token, which is intentionally close to the 1:1
+  bootstrap pool price so the liquidity book can form a real recipe.
 
 Outputs:
 

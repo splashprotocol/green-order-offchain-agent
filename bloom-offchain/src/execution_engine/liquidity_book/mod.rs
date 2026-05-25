@@ -13,7 +13,7 @@ use crate::execution_engine::liquidity_book::types::{AbsolutePrice, RelativePric
 use crate::execution_engine::types::Time;
 use algebra_core::monoid::Monoid;
 use either::Either;
-use log::trace;
+use log::{info, trace};
 use num_rational::Ratio;
 use primitive_types::U256;
 use spectrum_offchain::display::{display_option, display_tuple};
@@ -215,7 +215,14 @@ where
                                 }
                             }
                             _ => {
-                                trace!("Failed to match taker {}", target_taker);
+                                info!(
+                                    "{} failed to match taker {}; target_price={}, counter_price={}, maker_preview={}",
+                                    self.pair,
+                                    target_taker,
+                                    target_price.unwrap(),
+                                    display_option(&maybe_price_counter_taker),
+                                    display_option(&maybe_price_maker.map(|(id, fp)| display_tuple((id, fp.price))))
+                                );
                                 self.state.pre_add_taker(target_taker);
                             }
                         }
@@ -229,26 +236,31 @@ where
             trace!("{} Raw batch: {}", self.pair, batch);
             let size_post_attempt = self.state.size();
             events.push(ExecutionEvent::LiquidityBookSizePostAttempt(size_post_attempt));
+            let batch_summary = format!("{}", batch);
             match MatchmakingRecipe::try_from(batch, self.conf.clone()) {
                 Ok(ex_recipe) => {
                     trace!("{} Successfully formed a batch {}", self.pair, ex_recipe);
                     return (Some(ex_recipe), events);
                 }
                 Err(None) => {
-                    trace!("{} Matchmaking attempt failed in liquidity_book", self.pair);
+                    info!(
+                        "{} matchmaking attempt failed in liquidity_book; size_before={}, size_after={}, raw batch: {}",
+                        self.pair, size_pre_attempt, size_post_attempt, batch_summary
+                    );
                     self.state.rollback(StashingOption::Unstash);
                 }
                 Err(Some(Either::Left(unsatisfied_takers))) => {
-                    trace!(
-                        "{} Matchmaking attempt failed due to taker limits, retrying",
-                        self.pair
+                    info!(
+                        "{} matchmaking attempt failed due to taker limits, retrying with {} unsatisfied taker(s)",
+                        self.pair,
+                        unsatisfied_takers.len()
                     );
                     self.state.rollback(StashingOption::Stash(unsatisfied_takers));
                     continue;
                 }
                 Err(Some(Either::Right(_downgrade_required))) => {
-                    trace!(
-                        "{} Matchmaking attempt failed due to high execution complexity, retrying",
+                    info!(
+                        "{} matchmaking attempt failed due to high execution complexity, retrying",
                         self.pair
                     );
                     self.state.rollback(StashingOption::Stash(vec![]));

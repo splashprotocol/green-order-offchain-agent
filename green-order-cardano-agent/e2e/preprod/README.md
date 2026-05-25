@@ -1,7 +1,8 @@
 # Preprod Green Order E2E
 
 These scripts create live preprod state for one Royalty V1 pool and one Aleph green account, then submit one
-full-fill green intent through the local agent HTTP endpoint.
+full-fill green intent through the local agent HTTP endpoint. The default full-fill smoke order swaps 1 ADA for
+at least 900,000 generated test-token units.
 
 Copy `.env.example` to `.env` and fill:
 
@@ -23,9 +24,9 @@ deno run --no-lock --allow-read --allow-write --allow-env 00-prepare-preprod-wal
 
 The script writes ignored local secrets to `.state/preprod-wallets.json` and `.env.wallets`.
 
-Prepare operator collateral/funding first. This script writes the operator key and minimum funding threshold into
-`green-order-cardano-agent/resources/preprod.config.json`, so restart the agent after this step if it is already
-running.
+Prepare operator collateral/funding first. For the Catalyst demo wrapper, this script writes to a run-local copy
+of the agent config. If you run it directly, set `AGENT_CONFIG_PATH` to an explicit writable config path instead
+of mutating the committed template.
 
 ```bash
 deno run --no-lock --allow-net --allow-read --allow-write --allow-env 07-prepare-operator-funding.ts

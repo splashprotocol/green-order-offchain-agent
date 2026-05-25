@@ -75,7 +75,7 @@ export async function loadConfig(): Promise<PreprodE2eConfig> {
     poolInitialTokenAmount: bigintEnv("POOL_INITIAL_TOKEN_AMOUNT", 40_000_000n),
     accountInitialLovelace: bigintEnv("ACCOUNT_INITIAL_LOVELACE", 25_000_000n),
     smokeLeavingLovelace: bigintEnv("SMOKE_LEAVING_LOVELACE", 1_000_000n),
-    smokeExpectedTokenAmount: bigintEnv("SMOKE_EXPECTED_TOKEN_AMOUNT", 1n),
+    smokeExpectedTokenAmount: bigintEnv("SMOKE_EXPECTED_TOKEN_AMOUNT", 900_000n),
     smokeFeeLovelace: bigintEnv("SMOKE_FEE_LOVELACE", 2_000_000n),
     partialLeavingLovelace: bigintEnv("PARTIAL_LEAVING_LOVELACE", 20_000_000n),
     partialExpectedTokenAmount: bigintEnv("PARTIAL_EXPECTED_TOKEN_AMOUNT", 14_900_000n),

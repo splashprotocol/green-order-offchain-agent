@@ -23,7 +23,14 @@ demo_prepare_account_onchain() {
   fi
 
   echo "bootstrap: creating account prerequisites using generated wallets"
-  if [[ ! -f "$DEMO_BASE_AGENT_CONFIG_FILE" ]]; then
+  if [[ -f "$DEMO_BASE_AGENT_CONFIG_FILE" ]]; then
+    local existing_socket
+    existing_socket="$(jq -r '.node.path // empty' "$DEMO_BASE_AGENT_CONFIG_FILE" 2>/dev/null || true)"
+    if [[ -n "$existing_socket" && "$existing_socket" != "$CARDANO_NODE_SOCKET_PATH" ]]; then
+      echo "bootstrap: refreshing run-local agent config for current node socket"
+      cp "$REPO_ROOT/green-order-cardano-agent/resources/preprod.config.json" "$DEMO_BASE_AGENT_CONFIG_FILE"
+    fi
+  else
     cp "$REPO_ROOT/green-order-cardano-agent/resources/preprod.config.json" "$DEMO_BASE_AGENT_CONFIG_FILE"
   fi
   (

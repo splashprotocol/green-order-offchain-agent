@@ -26,6 +26,7 @@ Deno.test("loadConfig reads partial smoke env overrides", async () => {
 
     const config = await loadConfig();
 
+    assertEquals(config.smokeExpectedTokenAmount, 900_000n);
     assertEquals(config.partialLeavingLovelace, 20_000_000n);
     assertEquals(config.partialExpectedTokenAmount, 14_900_000n);
     assertEquals(config.partialFeeLovelace, 2_000_000n);
