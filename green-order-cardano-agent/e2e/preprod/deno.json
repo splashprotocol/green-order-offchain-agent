@@ -1,5 +1,6 @@
 {
   "lock": false,
+  "nodeModulesDir": true,
   "fmt": {
     "lineWidth": 110,
     "indentWidth": 2,
