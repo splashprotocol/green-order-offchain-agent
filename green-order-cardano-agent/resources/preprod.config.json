@@ -17,7 +17,7 @@
     "dbPath": "green-order-cardano-agent/e2e/preprod/.state/agent-chain-sync-funding"
   },
   "node": {
-    "path": "/Users/aleksandr/node-external/node.socket",
+    "path": "/absolute/path/to/preprod/node.socket",
     "magic": 1
   },
   "txSubmissionBufferSize": 64,
@@ -27,7 +27,7 @@
     "secs": 120,
     "nanos": 0
   },
-  "operatorKey": "xprv1zzfs2eqknq4z730pg84782l2mja8vskq5zph99r37vgplpa7razfmqsey2mg08l75refatytt504gh2cl6ld52qe5k47pp5n4zaukxzc7c4cnasd825qvpm3lss3k8vjuv8gus9qpue0ulgf5uk7gr2dwy4en3va",
+  "operatorKey": "GENERATED_BY_DEMO_BOOTSTRAP",
   "takeResidualFee": false,
   "minOperatorFundingLovelace": 50000000,
   "explorer": {

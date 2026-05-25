@@ -147,6 +147,7 @@ Important files:
 | --- | --- |
 | `wallets/preprod-wallets.json` | Generated wallet metadata for this run. |
 | `wallets/.env.wallets` | Generated env file with wallet seeds and addresses. |
+| `config/preprod-base-agent.json` | Run-local base agent config updated with generated operator and provided node socket. |
 | `config/preprod-partial-agent.json` | Agent config generated for this run. |
 | `preprod-green-order-e2e.json` | Main E2E state used by numbered TypeScript scripts. |
 | `state.json` | Wrapper-level run metadata. |

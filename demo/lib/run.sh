@@ -74,6 +74,7 @@ demo_init_run() {
   DEMO_REPORT_FILE="$DEMO_RUN_DIR/demo-report.md"
   DEMO_WALLET_STATE_FILE="$DEMO_WALLET_DIR/preprod-wallets.json"
   DEMO_WALLET_ENV_FILE="$DEMO_WALLET_DIR/.env.wallets"
+  DEMO_BASE_AGENT_CONFIG_FILE="$DEMO_CONFIG_DIR/preprod-base-agent.json"
   DEMO_AGENT_CONFIG_FILE="$DEMO_CONFIG_DIR/preprod-partial-agent.json"
   DEMO_AGENT_LOG_FILE="$DEMO_LOG_DIR/agent.log"
 

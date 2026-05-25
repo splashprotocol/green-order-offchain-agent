@@ -8,6 +8,7 @@ demo_bootstrap_env() {
   export WALLET_STATE_PATH="$DEMO_WALLET_STATE_FILE"
   export WALLET_ENV_PATH="$DEMO_WALLET_ENV_FILE"
   export CARDANO_NODE_SOCKET_PATH="${CARDANO_NODE_SOCKET_PATH:-${DEMO_NODE_SOCKET_PATH:-}}"
+  export AGENT_CONFIG_PATH="$DEMO_BASE_AGENT_CONFIG_FILE"
 }
 
 demo_prepare_account_onchain() {
@@ -22,6 +23,9 @@ demo_prepare_account_onchain() {
   fi
 
   echo "bootstrap: creating account prerequisites using generated wallets"
+  if [[ ! -f "$DEMO_BASE_AGENT_CONFIG_FILE" ]]; then
+    cp "$REPO_ROOT/green-order-cardano-agent/resources/preprod.config.json" "$DEMO_BASE_AGENT_CONFIG_FILE"
+  fi
   (
     demo_bootstrap_env
     deno run --no-lock --allow-net --allow-read --allow-write --allow-env 07-prepare-operator-funding.ts

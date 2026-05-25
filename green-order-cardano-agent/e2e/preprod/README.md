@@ -7,8 +7,13 @@ Copy `.env.example` to `.env` and fill:
 
 - `BLOCKFROST_PROJECT_ID`
 - `FUNDED_WALLET_SEED`
+- `CARDANO_NODE_SOCKET_PATH`
 - `OPERATOR_KEY_HASH_HEX`, matching the running agent operator payment key hash
 - optionally `ACCOUNT_HOT_PRIVATE_KEY_HEX`
+
+`CARDANO_NODE_SOCKET_PATH` must point to a running Cardano preprod node socket
+when starting the Rust agent. `06-deploy-aleph-reference-scripts.ts` also
+requires `ALEPH_BLUEPRINT_PATH` if Aleph reference scripts need to be deployed.
 
 To create local preprod wallets for the agent/batcher and reference-script deployment:
 

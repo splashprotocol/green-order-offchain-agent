@@ -1,10 +1,5 @@
-import {
-  Data,
-  getAddressDetails,
-  Lucid,
-  validatorToScriptHash,
-} from "npm:@lucid-evolution/lucid@0.3.53";
-import { preprodProvider, loadPreprodEnv } from "./src/provider.ts";
+import { Data, getAddressDetails, Lucid, validatorToScriptHash } from "npm:@lucid-evolution/lucid@0.3.53";
+import { loadPreprodEnv, preprodProvider } from "./src/provider.ts";
 
 type BlueprintValidator = {
   title: string;
@@ -21,7 +16,7 @@ type DeploymentValidator = {
 
 type Deployment = Record<string, DeploymentValidator>;
 
-const blueprintPath = Deno.env.get("ALEPH_BLUEPRINT_PATH")?.trim() ?? "/Users/aleksandr/RustroverProjects/aleph/plutus.json";
+const blueprintPath = requiredEnv("ALEPH_BLUEPRINT_PATH");
 const deploymentPath = Deno.env.get("DEPLOYMENT_PATH")?.trim() ?? "../../resources/preprod.deployment.json";
 
 await loadPreprodEnv();
@@ -45,8 +40,7 @@ if (!walletKeyHash) throw new Error("failed to derive deployment wallet payment 
 
 const blueprint = JSON.parse(await Deno.readTextFile(blueprintPath)) as { validators: BlueprintValidator[] };
 const account = findValidator(blueprint.validators, "account.account.else");
-const batchWitness =
-  findValidatorOrNull(blueprint.validators, "intent.batch_witness.else") ??
+const batchWitness = findValidatorOrNull(blueprint.validators, "intent.batch_witness.else") ??
   findValidator(blueprint.validators, "witness.batch_witness.else");
 
 const accountScript = { type: "PlutusV3" as const, script: account.compiledCode };
@@ -64,7 +58,12 @@ if (balance < 15_000_000n) {
 const markerDatum = Data.void();
 const tx = await lucid
   .newTx()
-  .pay.ToAddressWithData(walletAddress, { kind: "inline", value: markerDatum }, { lovelace: 5_000_000n }, accountScript)
+  .pay.ToAddressWithData(
+    walletAddress,
+    { kind: "inline", value: markerDatum },
+    { lovelace: 5_000_000n },
+    accountScript,
+  )
   .pay.ToAddressWithData(
     walletAddress,
     { kind: "inline", value: markerDatum },
@@ -126,7 +125,9 @@ function assertHash(name: string, expected: string, actual: string): void {
   }
 }
 
-async function submitSignedTx(signed: { submit: () => Promise<string>; toCBOR: () => string; toHash: () => string }): Promise<string> {
+async function submitSignedTx(
+  signed: { submit: () => Promise<string>; toCBOR: () => string; toHash: () => string },
+): Promise<string> {
   try {
     return await signed.submit();
   } catch (error) {
@@ -137,7 +138,10 @@ async function submitSignedTx(signed: { submit: () => Promise<string>; toCBOR: (
       body: hexToBytes(signed.toCBOR()),
     });
     if (!response.ok) {
-      throw new Error(`provider submit failed (${error}); direct Koios submit failed ${response.status}: ${await response.text()}`);
+      throw new Error(
+        `provider submit failed (${error}); direct Koios submit failed ${response.status}: ${await response
+          .text()}`,
+      );
     }
     const body = (await response.text()).trim().replace(/^"|"$/g, "");
     const expectedHash = signed.toHash();
@@ -165,9 +169,7 @@ async function inspectDeploymentTx(cbor: string): Promise<string> {
   for (let i = 0; i < body.outputs().len(); i++) {
     const output = body.outputs().get(i);
     lines.push(
-      `${i}: datum=${output.datum()?.kind() ?? "none"} script_ref=${
-        output.script_ref()?.kind() ?? "none"
-      }`,
+      `${i}: datum=${output.datum()?.kind() ?? "none"} script_ref=${output.script_ref()?.kind() ?? "none"}`,
     );
   }
   return lines.join("\n");

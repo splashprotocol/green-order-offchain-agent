@@ -49,6 +49,8 @@ demo_init_run
 [[ -d "$DEMO_RUN_DIR/wallets" ]]
 [[ -d "$DEMO_RUN_DIR/config" ]]
 [[ -d "$DEMO_RUN_DIR/logs" ]]
+[[ "$DEMO_BASE_AGENT_CONFIG_FILE" == "$DEMO_RUN_DIR/config/preprod-base-agent.json" ]]
+[[ "$DEMO_AGENT_CONFIG_FILE" == "$DEMO_RUN_DIR/config/preprod-partial-agent.json" ]]
 [[ -f "$DEMO_STATE_FILE" ]]
 [[ -f "$DEMO_CHECKPOINTS_FILE" ]]
 [[ "$DEMO_MODE" == "fresh" ]]
