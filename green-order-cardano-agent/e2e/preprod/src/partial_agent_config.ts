@@ -8,6 +8,8 @@ export type ChainSyncPoint = {
   hash: string;
 };
 
+import { withRetries } from "./retry.ts";
+
 type KoiosFetchFirst = (endpoint: string) => Promise<any>;
 
 type ChainSyncPointOptions = {
@@ -59,6 +61,17 @@ export async function createPartialAgentConfig(
   const nodeSocketPath = Deno.env.get("CARDANO_NODE_SOCKET_PATH")?.trim();
   if (nodeSocketPath) {
     config.node = { ...(config.node ?? {}), path: nodeSocketPath };
+  }
+  const healthListenAddr = Deno.env.get("AGENT_HEALTH_LISTEN_ADDR")?.trim();
+  if (healthListenAddr) {
+    config.healthListenAddr = healthListenAddr;
+  }
+  const httpListenAddr = Deno.env.get("AGENT_HTTP_LISTEN_ADDR")?.trim();
+  if (httpListenAddr) {
+    config.greenOrders.intentSource = {
+      ...(config.greenOrders.intentSource ?? {}),
+      httpListenAddr,
+    };
   }
   if (options.chainSyncPoint) {
     const point = { Specific: [options.chainSyncPoint.slot, options.chainSyncPoint.hash] };
@@ -134,28 +147,6 @@ export async function recentChainSyncPoint(
     throw new Error(`Koios blocks response has invalid chain point: ${JSON.stringify(block)}`);
   }
   return { slot, hash };
-}
-
-async function withRetries<T>(
-  operation: () => Promise<T>,
-  options: { description: string; attempts: number; delayMs: number },
-): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= options.attempts; attempt++) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error;
-      if (attempt === options.attempts) break;
-      console.warn(
-        `${options.description} failed (${attempt}/${options.attempts}); retrying in ${options.delayMs}ms: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, options.delayMs));
-    }
-  }
-  throw lastError;
 }
 
 async function koiosGetFirst(endpoint: string): Promise<any> {

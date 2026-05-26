@@ -4,6 +4,7 @@ demo_start_agent() {
   if [[ -n "${DEMO_AGENT_PID:-}" ]] && ps -p "$DEMO_AGENT_PID" >/dev/null 2>&1; then
     return 0
   fi
+  demo_require_agent_endpoint_free
 
   echo "agent: creating partial-fill preprod config"
   local lookback_seconds
@@ -13,6 +14,8 @@ demo_start_agent() {
     export PARTIAL_AGENT_DB_PATH="$DEMO_RUN_DIR/agent-chain-sync"
     export PARTIAL_CHAIN_SYNC_LOOKBACK_SECONDS="$lookback_seconds"
     export CARDANO_NODE_SOCKET_PATH="${CARDANO_NODE_SOCKET_PATH:-${DEMO_NODE_SOCKET_PATH:-}}"
+    export AGENT_HEALTH_LISTEN_ADDR="${AGENT_HEALTH_LISTEN_ADDR:-}"
+    export AGENT_HTTP_LISTEN_ADDR="${AGENT_HTTP_LISTEN_ADDR:-}"
     export BASE_AGENT_CONFIG_PATH="$DEMO_BASE_AGENT_CONFIG_FILE"
     deno run --no-lock --allow-net --allow-read --allow-write --allow-env \
       09-create-partial-agent-config.ts --out "$DEMO_AGENT_CONFIG_FILE"
@@ -26,7 +29,7 @@ demo_start_agent() {
   export DEMO_AGENT_STARTED_THIS_ATTEMPT
   (
     cd "$REPO_ROOT"
-    ./target/debug/green-order-cardano-agent \
+    exec ./target/debug/green-order-cardano-agent \
       --config-path "$DEMO_AGENT_CONFIG_FILE" \
       --deployment-path green-order-cardano-agent/resources/preprod.deployment.json \
       --validation-rules-path green-order-cardano-agent/resources/validation-rules.json.template \
@@ -58,12 +61,73 @@ demo_reset_agent_persistence() {
 demo_stop_agent() {
   local pid="${DEMO_AGENT_PID:-}"
   if [[ -z "$pid" && -f "${DEMO_RUN_DIR:-}/agent.pid" ]]; then
-    pid="$(cat "$DEMO_RUN_DIR/agent.pid")"
+    pid="$(cat "$DEMO_RUN_DIR/agent.pid" 2>/dev/null || true)"
   fi
-  if [[ -n "$pid" ]] && ps -p "$pid" >/dev/null 2>&1; then
+  if [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1; then
     echo "agent: stopping pid $pid"
     kill "$pid" >/dev/null 2>&1 || true
+    if ! demo_wait_for_agent_pid_exit "$pid"; then
+      echo "agent: pid $pid did not stop after TERM; forcing shutdown"
+      kill -KILL "$pid" >/dev/null 2>&1 || true
+      demo_wait_for_agent_pid_exit "$pid" || true
+    fi
     wait "$pid" 2>/dev/null || true
+  fi
+  if [[ -f "${DEMO_RUN_DIR:-}/agent.pid" ]]; then
+    rm -f "$DEMO_RUN_DIR/agent.pid"
+  fi
+  DEMO_AGENT_PID=""
+  export DEMO_AGENT_PID
+}
+
+demo_wait_for_agent_pid_exit() {
+  local pid="$1"
+  local deadline=$((SECONDS + ${DEMO_AGENT_STOP_TIMEOUT_SECONDS:-60}))
+  while (( SECONDS < deadline )); do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      return 0
+    fi
+    local status
+    status="$(ps -p "$pid" -o stat= 2>/dev/null || true)"
+    if [[ "$status" == *Z* ]]; then
+      wait "$pid" 2>/dev/null || true
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+demo_restart_agent() {
+  demo_stop_agent
+  demo_wait_for_agent_endpoint_stopped
+  demo_start_agent
+  demo_wait_for_agent_health
+}
+
+demo_agent_health_endpoint_responds() {
+  curl -sS "${AGENT_HEALTH_URL:-http://127.0.0.1:9024/health}" >/dev/null 2>&1
+}
+
+demo_wait_for_agent_endpoint_stopped() {
+  local deadline=$((SECONDS + ${DEMO_AGENT_STOP_TIMEOUT_SECONDS:-60}))
+  while (( SECONDS < deadline )); do
+    if ! demo_agent_health_endpoint_responds; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "agent health endpoint is still responding after stop: ${AGENT_HEALTH_URL:-http://127.0.0.1:9024/health}" >&2
+  echo "Stop the process using the agent health port, or set AGENT_HEALTH_URL/agent config to a free port." >&2
+  return 1
+}
+
+demo_require_agent_endpoint_free() {
+  if demo_agent_health_endpoint_responds; then
+    echo "agent health endpoint is already in use before start: ${AGENT_HEALTH_URL:-http://127.0.0.1:9024/health}" >&2
+    echo "Stop the existing agent process, or set AGENT_HEALTH_URL/agent config to a free port." >&2
+    return 1
   fi
 }
 
@@ -76,7 +140,7 @@ demo_wait_for_agent_health() {
       tail -n 80 "$DEMO_AGENT_LOG_FILE" >&2 || true
       return 1
     fi
-    if curl -sS "${AGENT_HEALTH_URL:-http://127.0.0.1:9024/health}" >/dev/null 2>&1; then
+    if demo_agent_health_endpoint_responds; then
       echo "agent: health endpoint responded"
       demo_checkpoint_done "agent_ready"
       demo_checkpoint_set_value "agent_ready_pid" "$(cat "$DEMO_RUN_DIR/agent.pid" 2>/dev/null || true)"

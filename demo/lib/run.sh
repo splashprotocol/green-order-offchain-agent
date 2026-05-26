@@ -93,6 +93,38 @@ demo_init_run() {
   if [[ ! -f "$DEMO_CHECKPOINTS_FILE" ]]; then
     printf '{}\n' >"$DEMO_CHECKPOINTS_FILE"
   fi
+
+  demo_init_agent_ports
+}
+
+demo_init_agent_ports() {
+  if [[ -n "${AGENT_HEALTH_URL:-}" && -n "${AGENT_URL:-}" && -n "${AGENT_HEALTH_LISTEN_ADDR:-}" && -n "${AGENT_HTTP_LISTEN_ADDR:-}" ]]; then
+    return 0
+  fi
+
+  local health_port http_port
+  health_port="$(demo_find_free_loopback_port "${DEMO_AGENT_HEALTH_PORT_START:-19024}")"
+  http_port="$(demo_find_free_loopback_port "${DEMO_AGENT_HTTP_PORT_START:-19031}")"
+  while [[ "$http_port" == "$health_port" ]]; do
+    http_port="$(demo_find_free_loopback_port "$((http_port + 1))")"
+  done
+
+  AGENT_HEALTH_LISTEN_ADDR="127.0.0.1:$health_port"
+  AGENT_HTTP_LISTEN_ADDR="127.0.0.1:$http_port"
+  AGENT_HEALTH_URL="http://$AGENT_HEALTH_LISTEN_ADDR/health"
+  AGENT_URL="http://$AGENT_HTTP_LISTEN_ADDR"
+  export AGENT_HEALTH_LISTEN_ADDR AGENT_HTTP_LISTEN_ADDR AGENT_HEALTH_URL AGENT_URL
+
+  demo_checkpoint_set_value "agent_health_url" "$AGENT_HEALTH_URL"
+  demo_checkpoint_set_value "agent_url" "$AGENT_URL"
+}
+
+demo_find_free_loopback_port() {
+  local port="$1"
+  while lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; do
+    port=$((port + 1))
+  done
+  printf '%s\n' "$port"
 }
 
 demo_checkpoint_done() {

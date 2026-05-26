@@ -97,11 +97,11 @@ impl AccountIndex {
                 return None;
             }
             self.pending_store_by_snapshot_id
-            .values()
-            .filter(|(pending_account_id, _, _)| *pending_account_id == account_id)
-            .filter_map(|(_, old_ref, _)| self.rollback_by_spent_ref.get(old_ref))
-            .map(|(_, account)| account.utxo.clone())
-            .next()
+                .values()
+                .filter(|(pending_account_id, _, _)| *pending_account_id == account_id)
+                .filter_map(|(_, old_ref, _)| self.rollback_by_spent_ref.get(old_ref))
+                .map(|(_, account)| account.utxo.clone())
+                .next()
         })
     }
 
@@ -236,12 +236,12 @@ impl AccountIndex {
         {
             return None;
         }
-        let has_matching_pending = self
-            .pending_store_by_snapshot_id
-            .values()
-            .any(|(pending_account_id, pending_old_ref, _)| {
-                *pending_account_id == account_id && *pending_old_ref == old_ref
-            });
+        let has_matching_pending =
+            self.pending_store_by_snapshot_id
+                .values()
+                .any(|(pending_account_id, pending_old_ref, _)| {
+                    *pending_account_id == account_id && *pending_old_ref == old_ref
+                });
         if !has_matching_pending {
             return None;
         }
@@ -250,11 +250,7 @@ impl AccountIndex {
             .map(|(_, account)| &account.store)
     }
 
-    fn remove_pending_snapshots_for(
-        &mut self,
-        account_id: AccountId,
-        old_ref: OutputRef,
-    ) {
+    fn remove_pending_snapshots_for(&mut self, account_id: AccountId, old_ref: OutputRef) {
         let removed = self
             .pending_store_by_snapshot_id
             .iter()
@@ -919,13 +915,7 @@ mod tests {
         assert_eq!(index.pending_continuations().len(), 1);
 
         index
-            .plan_path_update(
-                id,
-                old_ref,
-                pending_key,
-                pending_digest,
-                successor_intent,
-            )
+            .plan_path_update(id, old_ref, pending_key, pending_digest, successor_intent)
             .unwrap();
 
         assert_eq!(index.current(id), None);
@@ -946,7 +936,10 @@ mod tests {
             )],
         );
 
-        assert_eq!(index.current(id).map(|account| account.reference()), Some(new_ref));
+        assert_eq!(
+            index.current(id).map(|account| account.reference()),
+            Some(new_ref)
+        );
         assert_eq!(index.pending_continuations().len(), 1);
     }
 
@@ -1459,6 +1452,58 @@ mod tests {
             index.bind_external_account_id_once(id, new_ref),
             Err(AccountBindingError::AlreadyBound)
         );
+    }
+
+    #[test]
+    fn consumed_persisted_store_binds_successor_output_after_restart() {
+        let id = account_id(21);
+        let old_ref = output_ref(33);
+        let new_ref = output_ref(34);
+        let old_output = dummy_output(2_000_000);
+        let new_output = dummy_output(2_100_000);
+        let canonical_order_id = GreenOrderId::new(id, 0, 42, [21; 32]);
+        let updated_intent = intent(500);
+        let path = std::env::temp_dir().join(format!(
+            "green-account-store-test-{}-consumed-persisted.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let planned_root = {
+            let mut index = AccountIndex::with_persistence_path(path.clone());
+            index.bind_indexed(
+                id,
+                IndexedAccount {
+                    utxo: FinalizedTxOut::new(old_output, old_ref),
+                    store: crate::account_store::AccountStore::empty(),
+                },
+            );
+            let planned = index
+                .plan_sig_insert(
+                    id,
+                    old_ref,
+                    canonical_order_id,
+                    updated_intent.intent_key(),
+                    updated_intent,
+                )
+                .unwrap();
+            planned.new_root
+        };
+
+        let mut reloaded = AccountIndex::with_persistence_path(path.clone());
+        reloaded.observe_transaction(
+            [old_ref],
+            [account_utxo_with_root(new_ref, new_output, planned_root)],
+        );
+
+        assert_eq!(
+            reloaded.current(id).map(|account| account.reference()),
+            Some(new_ref)
+        );
+        let continuations = reloaded.pending_continuations();
+        assert_eq!(continuations.len(), 1);
+        assert_eq!(continuations[0].0.id, canonical_order_id);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

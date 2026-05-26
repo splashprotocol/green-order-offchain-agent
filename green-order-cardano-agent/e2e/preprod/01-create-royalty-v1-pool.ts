@@ -15,6 +15,7 @@ import {
   validateRoyaltyPoolPlan,
 } from "./src/royalty_pool_v1.ts";
 import { loadState, PoolValidator, PreprodE2eState, saveState } from "./src/state.ts";
+import { withRetries } from "./src/retry.ts";
 import { waitFor } from "./src/wait.ts";
 
 const dryRun = Deno.args.includes("--dry-run");
@@ -71,7 +72,9 @@ const poolAddress = credentialToAddress("Preprod", {
   type: "Script",
   hash: config.deployment[validator].hash,
 });
-const existingPool = (await lucid.utxosAt(poolAddress)).find((utxo) => utxo.assets[plan.poolNft] === 1n);
+const existingPool = (await withRetries(() => lucid.utxosAt(poolAddress), {
+  description: "load Royalty V1 pool UTxOs",
+})).find((utxo) => utxo.assets[plan.poolNft] === 1n);
 if (existingPool) {
   if (!force) {
     throw new Error(
@@ -99,7 +102,9 @@ if (existingPool) {
 const signed = await signedPoolTx();
 const txHash = await submitSignedTx(signed);
 const outputRef = await waitFor("created Royalty V1 pool output", async () => {
-  const utxos = await lucid.utxosAt(poolAddress);
+  const utxos = await withRetries(() => lucid.utxosAt(poolAddress), {
+    description: "poll created Royalty V1 pool output",
+  });
   const found = utxos.find((utxo) => utxo.txHash === txHash && utxo.assets[plan.poolNft] === 1n);
   return found ? { txHash: found.txHash, outputIndex: found.outputIndex } : undefined;
 });
@@ -159,18 +164,22 @@ async function signedPoolTx() {
       [candidatePlan.poolNft]: 1n,
       [candidatePlan.assetLq]: candidatePlan.depositedLq,
     };
-    const tx = await lucid
-      .newTx()
-      .attach.Script(nativePolicy)
-      .mintAssets({
-        [candidatePlan.assetY]: candidatePlan.initialTokenAmount,
-        [candidatePlan.poolNft]: 1n,
-        [candidatePlan.assetLq]: candidatePlan.depositedLq,
-      }, Data.to(0n))
-      .pay.ToAddressWithData(poolAddress, { kind: "inline", value: candidatePlan.datum }, candidateAssets)
-      .addSignerKey(paymentCred.hash)
-      .complete();
-    const candidateSigned = await tx.sign.withWallet().complete();
+    const candidateSigned = await withRetries(async () => {
+      const tx = await lucid
+        .newTx()
+        .attach.Script(nativePolicy)
+        .mintAssets({
+          [candidatePlan.assetY]: candidatePlan.initialTokenAmount,
+          [candidatePlan.poolNft]: 1n,
+          [candidatePlan.assetLq]: candidatePlan.depositedLq,
+        }, Data.to(0n))
+        .pay.ToAddressWithData(poolAddress, { kind: "inline", value: candidatePlan.datum }, candidateAssets)
+        .addSignerKey(paymentCred.hash)
+        .complete();
+      return await tx.sign.withWallet().complete();
+    }, {
+      description: `build and sign Royalty V1 pool candidate ${attempt + 1}`,
+    });
     const candidateTxHash = candidateSigned.toHash();
     if (!minPoolTxHash || minPoolTxHash < candidateTxHash) {
       if (attempt > 0 || minPoolTxHash) {

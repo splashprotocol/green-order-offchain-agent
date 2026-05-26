@@ -54,6 +54,10 @@ demo_init_run
 [[ -f "$DEMO_STATE_FILE" ]]
 [[ -f "$DEMO_CHECKPOINTS_FILE" ]]
 [[ "$DEMO_MODE" == "fresh" ]]
+[[ "$AGENT_HEALTH_LISTEN_ADDR" == 127.0.0.1:* ]]
+[[ "$AGENT_HTTP_LISTEN_ADDR" == 127.0.0.1:* ]]
+[[ "$AGENT_HEALTH_URL" == "http://$AGENT_HEALTH_LISTEN_ADDR/health" ]]
+[[ "$AGENT_URL" == "http://$AGENT_HTTP_LISTEN_ADDR" ]]
 
 touch "$DEMO_RUN_DIR/wallets/existing.key"
 if DEMO_STATE_ROOT="$tmp_dir/runs" demo_parse_args --fresh --run-id "$DEMO_RUN_ID" 2>/dev/null; then

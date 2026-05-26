@@ -15,9 +15,9 @@ demo_verify_execution_results() {
   jq -e '.partialSmoke.storePath | strings | length > 0' "$state" >/dev/null
 
   if [[ "${DEMO_AGENT_STARTED_THIS_ATTEMPT:-0}" == "1" ]] &&
-    grep -E 'panic|Unsupported|invalid proof|RootMismatch|task abort' "$DEMO_AGENT_LOG_FILE" >/dev/null 2>&1; then
+    grep -aE 'panic|Unsupported|invalid proof|RootMismatch|task abort' "$DEMO_AGENT_LOG_FILE" >/dev/null 2>&1; then
     echo "agent log contains unexpected crash pattern; log: $DEMO_AGENT_LOG_FILE" >&2
-    grep -En 'panic|Unsupported|invalid proof|RootMismatch|task abort' "$DEMO_AGENT_LOG_FILE" >&2 || true
+    grep -aEn 'panic|Unsupported|invalid proof|RootMismatch|task abort' "$DEMO_AGENT_LOG_FILE" >&2 || true
     return 1
   fi
 

@@ -5,6 +5,8 @@ use bloom_offchain_cardano::event_sink::tx_view::TxViewMut;
 use bloom_offchain_cardano::orders::green::{AlephAccountUtxo, ALEPH_ACCOUNT_VALIDATOR};
 use cardano_chain_sync::data::LedgerTxEvent;
 use cardano_mempool_sync::data::MempoolUpdate;
+use log::info;
+use spectrum_cardano_lib::transaction::TransactionOutputExtension;
 use spectrum_cardano_lib::OutputRef;
 use spectrum_offchain::domain::Has;
 use spectrum_offchain::event_sink::event_handler::EventHandler;
@@ -41,7 +43,22 @@ where
     for (index, output) in &tx.outputs {
         let output_ref = OutputRef::new(tx.hash, *index as u64);
         if let Some(account) = AlephAccountUtxo::try_parse(output_ref, output.clone(), ctx) {
+            info!(
+                "Observed Aleph account output {} for main key {}",
+                output_ref,
+                hex::encode(&account.state.main_key)
+            );
             events.push(AccountEvent::Produced(account));
+        } else if output.script_hash()
+            == Some(
+                ctx.select::<DeployedScriptInfo<{ ALEPH_ACCOUNT_VALIDATOR }>>()
+                    .script_hash,
+            )
+        {
+            info!(
+                "Ignored Aleph account script output {} because account datum could not be parsed",
+                output_ref
+            );
         }
     }
     events
@@ -96,18 +113,10 @@ where
     C: Has<DeployedScriptInfo<{ ALEPH_ACCOUNT_VALIDATOR }>> + Clone + Send + Sync + 'static,
 {
     async fn try_handle(&mut self, ev: MempoolUpdate<TxViewMut>) -> Option<MempoolUpdate<TxViewMut>> {
-        match &ev {
-            MempoolUpdate::TxAccepted(tx) => {
-                let events = scan_account_events(tx, &self.ctx);
-                let mut index = self.index.lock().expect("account index lock poisoned");
-                apply_account_events(&mut index, events);
-            }
-            MempoolUpdate::TxDropped(tx) => {
-                let events = scan_account_events(tx, &self.ctx);
-                let mut index = self.index.lock().expect("account index lock poisoned");
-                revert_account_events(&mut index, events);
-            }
-        }
+        // Account stores are durable state. Mempool accept/drop events are
+        // transient and can remove the planned successor store before the same
+        // transaction is observed from ledger, so account indexing is driven by
+        // confirmed chain events only.
         Some(ev)
     }
 }

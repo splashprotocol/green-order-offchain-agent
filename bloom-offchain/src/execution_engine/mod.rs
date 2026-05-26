@@ -529,6 +529,18 @@ where
                     self.index.put_fallback(st);
                     return None;
                 }
+                if from_mempool && st.is_quasi_permanent() {
+                    let stable_id = st.stable_id();
+                    let state_before_invalidation = resolve_state(stable_id.clone(), &self.index);
+                    self.index.invalidate_version(st.version());
+                    let state_after_invalidation = resolve_state(stable_id, &self.index);
+                    if state_before_invalidation.as_ref().map(|st| st.version())
+                        == state_after_invalidation.as_ref().map(|st| st.version())
+                    {
+                        return None;
+                    }
+                    return to_transition(state_before_invalidation, state_after_invalidation);
+                }
                 if from_ledger || !st.is_quasi_permanent() {
                     self.index.eliminate(st.stable_id());
                 }
@@ -1200,13 +1212,85 @@ mod tests {
         );
 
         assert!(engine
-            .update_state(Channel::ledger(Transition::Forward(Ior::Right(entity.clone())), ()))
+            .update_state(Channel::ledger(
+                Transition::Forward(Ior::Right(entity.clone())),
+                ()
+            ))
             .is_some());
 
         let transition = engine.update_state(Channel::ledger(Transition::Forward(Ior::Left(entity)), ()));
 
         assert!(transition.is_none());
         assert!(engine.index.get_fallback(stable_id).is_some());
+    }
+
+    #[test]
+    fn mempool_removal_of_quasi_permanent_entity_keeps_confirmed_state_without_book_removal() {
+        let stable_id = test_token();
+        let version = test_ref(0);
+        let entity = Bundled(
+            TestEntity {
+                stable_id,
+                version,
+                quasi_permanent: true,
+            },
+            TestBearer(TestRef(0)),
+        );
+        let (feedback_tx, feedback_rx) = mpsc::channel(1);
+        drop(feedback_tx);
+        let (health_tx, _health_rx) = mpsc::unbounded();
+        let mut engine: Executor<
+            futures::stream::Empty<()>,
+            futures::stream::Empty<()>,
+            TestRef,
+            Token,
+            OutputRef,
+            TestEntity,
+            TestEntity,
+            TestEntity,
+            TestBearer,
+            (),
+            (),
+            (),
+            (),
+            (),
+            InMemoryStateIndex<Bundled<TestEntity, TestBearer>>,
+            (),
+            (),
+            (),
+            (),
+            (),
+            (),
+            (),
+            (),
+        > = Executor::new(
+            InMemoryStateIndex::new(),
+            MultiPair::new::<()>((), "test-book"),
+            MultiPair::new::<()>((), "test-backlog"),
+            (),
+            (),
+            (),
+            (),
+            futures::stream::empty(),
+            futures::stream::empty(),
+            feedback_rx,
+            Beacon::relaxed(true),
+            Beacon::relaxed(false),
+            0,
+            health_tx,
+        );
+
+        assert!(engine
+            .update_state(Channel::ledger(
+                Transition::Forward(Ior::Right(entity.clone())),
+                ()
+            ))
+            .is_some());
+
+        let transition = engine.update_state(Channel::mempool(Transition::Backward(Ior::Left(entity))));
+
+        assert!(transition.is_none());
+        assert!(engine.index.get_last_confirmed(stable_id).is_some());
     }
 
     #[test]

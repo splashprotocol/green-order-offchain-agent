@@ -31,7 +31,9 @@ demo_main() {
     return 0
   fi
 
-  trap 'demo_stop_agent || true' EXIT
+  trap 'demo_cleanup_on_exit' EXIT
+  trap 'demo_cleanup_on_interrupt' INT
+  trap 'demo_cleanup_on_terminate' TERM
 
   demo_check_required_tools
   demo_refuse_unsafe_network
@@ -72,6 +74,24 @@ demo_main() {
   demo_print_tx_summary
   echo "Report: $DEMO_REPORT_FILE"
   echo "Result: PASS"
+}
+
+demo_cleanup_on_exit() {
+  local status=$?
+  demo_stop_agent || true
+  exit "$status"
+}
+
+demo_cleanup_on_interrupt() {
+  trap - EXIT INT TERM
+  demo_stop_agent || true
+  exit 130
+}
+
+demo_cleanup_on_terminate() {
+  trap - EXIT INT TERM
+  demo_stop_agent || true
+  exit 143
 }
 
 demo_print_help() {

@@ -54,6 +54,8 @@ demo_run_partial_fill_smoke() {
     return 0
   fi
   echo "smoke: running partial-fill intent"
+  echo "agent: restarting from confirmed state before partial-fill account lookup"
+  demo_restart_agent
   demo_wait_for_account_observed
   if demo_account_needs_external_bind; then
     demo_bind_account_onchain
