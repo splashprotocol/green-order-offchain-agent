@@ -1,6 +1,9 @@
 {
   "lock": false,
   "nodeModulesDir": true,
+  "imports": {
+    "@noble/hashes/blake2b": "npm:@noble/hashes@1.7.1/blake2b"
+  },
   "fmt": {
     "lineWidth": 110,
     "indentWidth": 2,
