@@ -1,11 +1,15 @@
 import { credentialToAddress } from "npm:@lucid-evolution/utils@0.1.65";
-import { parseAgentAcceptedResponse, submitIntent } from "./src/agent.ts";
-import { attachAccountOutputRefToEntitlement, deriveCompressedPublicKey, signIntentDigest } from "./src/aleph.ts";
+import {
+  attachAccountOutputRefToEntitlement,
+  deriveCompressedPublicKey,
+  signIntentDigest,
+} from "./src/aleph.ts";
 import { parseAccountDatum } from "./src/account_datum.ts";
 import { loadConfig } from "./src/config.ts";
 import { adaAsset, alephIntentionDigest, buildIntentPayload, nativeAsset } from "./src/intent.ts";
 import { koiosUtxoByRef, koiosUtxoByRefWithSpent, koiosUtxosAt, SimpleUtxo } from "./src/koios.ts";
 import { computePartialFillPlan, PartialFillPlan } from "./src/partial_preflight.ts";
+import { loadGreenOrderSdkClient, parseSdkAcceptedResponse, submitIntentViaSdk } from "./src/sdk_agent.ts";
 import { loadState, saveState } from "./src/state.ts";
 import { waitFor } from "./src/wait.ts";
 
@@ -90,8 +94,12 @@ console.log(`partial preflight: ${JSON.stringify(stringifyPlan(preflight))}`);
 if (!verifyExecutionTx) {
   if (!oldAccount) throw new Error("current account output is not available on preprod");
   if (!oldPool) throw new Error("current pool output is not available on preprod");
-  const response = await submitIntent(config.agentUrl, payload);
-  parseAgentAcceptedResponse(response);
+  const sdkClient = await loadGreenOrderSdkClient(config.agentUrl, {
+    secret: config.agentHmacSecret,
+    keyId: config.agentHmacKeyId,
+  });
+  const response = await submitIntentViaSdk(sdkClient, payload);
+  parseSdkAcceptedResponse(response);
   console.log("partial_intent_status=accepted");
 }
 

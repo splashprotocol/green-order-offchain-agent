@@ -3,6 +3,8 @@ import { loadConfig } from "../src/config.ts";
 
 const ENV_KEYS = [
   "AGENT_CONFIG_PATH",
+  "AGENT_HMAC_KEY_ID",
+  "AGENT_HMAC_SECRET",
   "FUNDED_WALLET_SEED",
   "WALLET_ENV_PATH",
   "PARTIAL_LEAVING_LOVELACE",
@@ -53,6 +55,24 @@ Deno.test("loadConfig reads generated wallet env from WALLET_ENV_PATH", async ()
   } finally {
     await Deno.remove(agentConfigPath).catch(() => {});
     await Deno.remove(walletEnvPath).catch(() => {});
+    restoreEnv(previous);
+  }
+});
+
+Deno.test("loadConfig reads optional agent HMAC settings", async () => {
+  const previous = snapshotEnv(ENV_KEYS);
+  const agentConfigPath = await writeTempAgentConfig();
+  try {
+    Deno.env.set("AGENT_CONFIG_PATH", agentConfigPath);
+    Deno.env.set("AGENT_HMAC_SECRET", "test-secret");
+    Deno.env.set("AGENT_HMAC_KEY_ID", "preprod");
+
+    const config = await loadConfig();
+
+    assertEquals(config.agentHmacSecret, "test-secret");
+    assertEquals(config.agentHmacKeyId, "preprod");
+  } finally {
+    await Deno.remove(agentConfigPath).catch(() => {});
     restoreEnv(previous);
   }
 });

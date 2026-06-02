@@ -3,6 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+npm --prefix ../../../sdk/typescript run build
+
 force_args=()
 if [[ "${FORCE_E2E_STATE:-0}" == "1" ]]; then
   force_args=(--force)

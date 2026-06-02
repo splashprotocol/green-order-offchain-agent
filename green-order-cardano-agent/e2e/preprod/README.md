@@ -1,8 +1,8 @@
 # Preprod Green Order E2E
 
 These scripts create live preprod state for one Royalty V1 pool and one Aleph green account, then submit one
-full-fill green intent through the local agent HTTP endpoint. The default full-fill smoke order swaps 1 ADA for
-at least 900,000 generated test-token units.
+full-fill green intent through the local agent HTTP endpoint using the local TypeScript SDK. The default full-fill
+smoke order swaps 1 ADA for at least 900,000 generated test-token units.
 
 Copy `.env.example` to `.env` and fill:
 
@@ -11,10 +11,16 @@ Copy `.env.example` to `.env` and fill:
 - `CARDANO_NODE_SOCKET_PATH`
 - `OPERATOR_KEY_HASH_HEX`, matching the running agent operator payment key hash
 - optionally `ACCOUNT_HOT_PRIVATE_KEY_HEX`
+- optionally `AGENT_HMAC_SECRET` and `AGENT_HMAC_KEY_ID`
 
 `CARDANO_NODE_SOCKET_PATH` must point to a running Cardano preprod node socket
 when starting the Rust agent. `06-deploy-aleph-reference-scripts.ts` also
 requires `ALEPH_BLUEPRINT_PATH` if Aleph reference scripts need to be deployed.
+
+`AGENT_HMAC_SECRET` and `AGENT_HMAC_KEY_ID` are not required for the local
+preprod agent. If they are set, the E2E harness passes them to the TypeScript
+SDK and the SDK signs agent HTTP requests with HMAC headers. Do not hardcode
+these values in scripts or committed config.
 
 To create local preprod wallets for the agent/batcher and reference-script deployment:
 
@@ -42,6 +48,24 @@ deno run --no-lock --allow-net --allow-read --allow-write --allow-env 03-create-
 deno run --no-lock --allow-net --allow-read --allow-write --allow-env 08-create-separator-funding.ts
 deno run --no-lock --allow-net --allow-read --allow-write --allow-env 04-submit-green-order-smoke.ts
 ```
+
+The `run-preprod-e2e.sh` wrapper builds `sdk/typescript` before the first script
+that calls the agent, so `03-create-aleph-account-and-bind.ts`,
+`04-submit-green-order-smoke.ts`, and `10-submit-green-order-partial-smoke.ts`
+exercise the SDK client for `bindAccount` and `submitIntent`.
+
+To demonstrate all read-only SDK endpoints available on `AGENT_URL` after an
+account is bound, run:
+
+```bash
+npm --prefix ../../../sdk/typescript run build
+deno run --no-lock --allow-net --allow-read --allow-env 11-query-agent-via-sdk.ts
+```
+
+The query script calls `getMonitoringReadiness`, `getMonitoringSummary`,
+`getAccount`, and `getAccountStatus`. The SDK `getReadiness` method targets
+`/health` on the client base URL, while this preprod harness keeps health checks
+on `AGENT_HEALTH_URL`.
 
 The scripts persist local state under `.state/`. Removing `.state/` resets only the local harness; it does not
 undo preprod transactions.

@@ -1,6 +1,5 @@
 import { Constr, Data } from "npm:@lucid-evolution/lucid@0.3.53";
 import { credentialToAddress } from "npm:@lucid-evolution/utils@0.1.65";
-import { bindAccount } from "./src/agent.ts";
 import {
   accountIdFromMainKey,
   ALEPH_ACCOUNT_MAGIC_HEX,
@@ -12,6 +11,7 @@ import {
 } from "./src/aleph.ts";
 import { loadConfig } from "./src/config.ts";
 import { getLucid, submitSignedTx } from "./src/lucid.ts";
+import { bindAccountViaSdk, loadGreenOrderSdkClient } from "./src/sdk_agent.ts";
 import { loadState, OutputRef, PreprodE2eState, saveState } from "./src/state.ts";
 import { waitFor } from "./src/wait.ts";
 
@@ -110,8 +110,12 @@ if (createOnly) {
 }
 
 console.log(`Binding Aleph account ${pending.accountId} to agent`);
+const sdkClient = await loadGreenOrderSdkClient(config.agentUrl, {
+  secret: config.agentHmacSecret,
+  keyId: config.agentHmacKeyId,
+});
 await waitFor("agent account binding", async () => {
-  const body = await bindAccount(config.agentUrl, pending.accountId, pending.outputRef as OutputRef).catch(
+  const body = await bindAccountViaSdk(sdkClient, pending.accountId, pending.outputRef as OutputRef).catch(
     (error) => {
       if (String(error).includes("outputNotObserved")) return undefined;
       if (force && String(error).includes("alreadyBound")) {

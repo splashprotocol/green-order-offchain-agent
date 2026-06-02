@@ -1,10 +1,10 @@
 import { credentialToAddress } from "npm:@lucid-evolution/utils@0.1.65";
-import { parseAgentAcceptedResponse, submitIntent } from "./src/agent.ts";
 import { deriveCompressedPublicKey, signIntentDigest } from "./src/aleph.ts";
 import { parseAccountDatum } from "./src/account_datum.ts";
 import { loadConfig } from "./src/config.ts";
 import { adaAsset, alephIntentionDigest, buildIntentPayload, nativeAsset } from "./src/intent.ts";
 import { koiosUtxoByRef, koiosUtxosAt, SimpleUtxo } from "./src/koios.ts";
+import { loadGreenOrderSdkClient, parseSdkAcceptedResponse, submitIntentViaSdk } from "./src/sdk_agent.ts";
 import { loadState, saveState } from "./src/state.ts";
 import { waitFor } from "./src/wait.ts";
 
@@ -69,8 +69,12 @@ if (!oldAccount.datum) {
 const oldPool = await koiosUtxoByRef(state.pool.outputRef);
 if (!oldPool) throw new Error("current pool output is not available on preprod");
 
-const response = await submitIntent(config.agentUrl, payload);
-parseAgentAcceptedResponse(response);
+const sdkClient = await loadGreenOrderSdkClient(config.agentUrl, {
+  secret: config.agentHmacSecret,
+  keyId: config.agentHmacKeyId,
+});
+const response = await submitIntentViaSdk(sdkClient, payload);
+parseSdkAcceptedResponse(response);
 
 await waitFor("old Aleph account output to be spent", async () => {
   const utxo = await koiosUtxoByRef(state.account!.outputRef);
