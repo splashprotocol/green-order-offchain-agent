@@ -38,8 +38,17 @@ of mutating the committed template.
 deno run --no-lock --allow-net --allow-read --allow-write --allow-env 07-prepare-operator-funding.ts
 ```
 
-Then run the green-order agent with `green-order-cardano-agent/resources/preprod.config.json` and wait for health
-before creating pool/account state and submitting the smoke order.
+The `run-preprod-e2e.sh` wrapper starts a run-local Green Order agent by
+default. It copies the committed preprod config to `.state/`, updates the
+operator key and node socket there, creates a partial-fill runtime config, starts
+`target/debug/green-order-cardano-agent`, waits for `AGENT_HEALTH_URL`, and
+stops the process on exit. Set `START_GREEN_ORDER_AGENT=0` to use an externally
+managed agent instead.
+
+If running individual scripts manually, start the green-order agent with
+`green-order-cardano-agent/resources/preprod.config.json` or a writable copy and
+wait for health before creating pool/account state and submitting the smoke
+order.
 
 ```bash
 deno run --no-lock --allow-net --allow-read --allow-write --allow-env 01-create-royalty-v1-pool.ts
