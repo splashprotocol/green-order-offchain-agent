@@ -28,3 +28,12 @@ Deno.test("run-preprod-e2e passes an absolute generated config path to the agent
   assertStringIncludes(runner, 'AGENT_RUN_CONFIG_PATH="$(absolute_e2e_path');
   assertStringIncludes(runner, '--config-path "$AGENT_RUN_CONFIG_PATH"');
 });
+
+Deno.test("run-preprod-e2e queries SDK monitoring after smoke execution", () => {
+  const smokeIndex = runner.indexOf('"${smoke_script}"');
+  const queryIndex = runner.indexOf("11-query-agent-via-sdk.ts");
+
+  assert(smokeIndex >= 0, "runner should execute the smoke script");
+  assert(queryIndex >= 0, "runner should query SDK monitoring");
+  assert(smokeIndex < queryIndex, "SDK monitoring query must run after smoke execution");
+});

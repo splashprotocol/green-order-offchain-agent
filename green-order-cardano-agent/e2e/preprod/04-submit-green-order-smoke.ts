@@ -75,6 +75,7 @@ const sdkClient = await loadGreenOrderSdkClient(config.agentUrl, {
 });
 const response = await submitIntentViaSdk(sdkClient, payload);
 parseSdkAcceptedResponse(response);
+console.log("intent_acceptance_response=" + JSON.stringify(response));
 
 await waitFor("old Aleph account output to be spent", async () => {
   const utxo = await koiosUtxoByRef(state.account!.outputRef);
@@ -119,7 +120,24 @@ await saveState(config.statePath, {
   },
   smoke: { submittedIntentDigest: digestHex, executionTxHash: newAccount.txHash },
 });
-console.log("Submitted green order smoke intent");
+console.log(JSON.stringify(
+  {
+    smokeExecution: {
+      submittedIntentDigest: digestHex,
+      acceptedResponse: response,
+      accountId: state.account.accountId,
+      oldAccountOutputRef: state.account.outputRef,
+      oldPoolOutputRef: state.pool.outputRef,
+      executionTxHash: newAccount.txHash,
+      newAccountOutputRef: { txHash: newAccount.txHash, outputIndex: newAccount.outputIndex },
+      newPoolOutputRef: { txHash: newPool.txHash, outputIndex: newPool.outputIndex },
+      outputAsset: state.pool.assetY,
+    },
+  },
+  null,
+  2,
+));
+console.log(`Submitted green order smoke intent in execution tx ${newAccount.txHash}`);
 
 function assertAccountAdvanced(
   oldAccount: { assets: Record<string, bigint> },
