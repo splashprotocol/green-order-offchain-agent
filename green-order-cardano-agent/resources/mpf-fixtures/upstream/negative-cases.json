@@ -1,0 +1,14 @@
+{
+  "name": "negative-cases",
+  "source": "typed negative cases for Rust MPF verifier; malformed cases are representable without upstream oracle roots",
+  "cases": [
+    "duplicate_insert",
+    "missing_update",
+    "missing_delete",
+    "wrong_old_root",
+    "wrong_value",
+    "malformed_branch_neighbors",
+    "malformed_skip",
+    "malformed_fork_nibble"
+  ]
+}

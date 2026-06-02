@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use axum::extract::Path;
 use axum::extract::Query;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -45,6 +46,9 @@ where
         .route("/intents", post(post_intent::<C>))
         .route("/accounts/bind", post(post_bind_account::<C>))
         .route("/accounts/status", get(get_account_status::<C>))
+        .route("/accounts/:account_id", get(get_account::<C>))
+        .route("/monitoring/summary", get(get_monitoring_summary::<C>))
+        .route("/monitoring/readiness", get(get_monitoring_readiness))
         .with_state(state)
 }
 
@@ -61,6 +65,23 @@ pub(crate) struct BindAccountRequest {
 pub struct BindAccountResponse {
     pub status: &'static str,
     pub reason: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HttpOutputRef {
+    tx_hash: String,
+    output_index: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HttpAccountSummary {
+    account_id: String,
+    current_output_ref: Option<HttpOutputRef>,
+    current_store_root: Option<String>,
+    pending: bool,
+    persisted_outputs: usize,
 }
 
 #[derive(Deserialize)]
@@ -167,6 +188,95 @@ where
     (StatusCode::OK, Json(serde_json::json!({"status": status})))
 }
 
+async fn get_account<C>(
+    State(state): State<HttpIntentState<C>>,
+    Path(account_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>)
+where
+    C: Has<DeployedScriptInfo<{ ALEPH_ACCOUNT_VALIDATOR }>> + Clone + Send + Sync + 'static,
+{
+    let Ok(account_id) = parse_account_id(account_id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"status": "rejected", "reason": "malformedAccountId", "account": null})),
+        );
+    };
+    let summary = state
+        .account_index
+        .lock()
+        .expect("account index lock poisoned")
+        .account_summary(account_id);
+    match summary {
+        Some(summary) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "found",
+                "reason": null,
+                "account": http_account_summary(summary),
+            })),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"status": "notFound", "reason": "accountNotFound", "account": null})),
+        ),
+    }
+}
+
+async fn get_monitoring_summary<C>(
+    State(state): State<HttpIntentState<C>>,
+) -> (StatusCode, Json<serde_json::Value>)
+where
+    C: Has<DeployedScriptInfo<{ ALEPH_ACCOUNT_VALIDATOR }>> + Clone + Send + Sync + 'static,
+{
+    let summary = state
+        .account_index
+        .lock()
+        .expect("account index lock poisoned")
+        .summary();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "ok",
+            "accounts": {
+                "currentAccounts": summary.current_accounts,
+                "pendingAccounts": summary.pending_accounts,
+                "unboundOutputs": summary.unbound_outputs,
+                "predictedOutputs": summary.predicted_outputs,
+                "persistedOutputs": summary.persisted_outputs,
+            },
+        })),
+    )
+}
+
+async fn get_monitoring_readiness() -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "ok",
+            "service": "green-order-agent",
+            "apiVersion": 1,
+            "accountIndex": "available",
+        })),
+    )
+}
+
+fn http_account_summary(summary: crate::account_index::AccountSummary) -> HttpAccountSummary {
+    HttpAccountSummary {
+        account_id: hex::encode(summary.account_id.bytes()),
+        current_output_ref: summary.current_output_ref.map(http_output_ref),
+        current_store_root: summary.current_store_root.map(hex::encode),
+        pending: summary.pending,
+        persisted_outputs: summary.persisted_outputs,
+    }
+}
+
+fn http_output_ref(output_ref: spectrum_cardano_lib::OutputRef) -> HttpOutputRef {
+    HttpOutputRef {
+        tx_hash: hex::encode(output_ref.tx_hash().to_raw_bytes()),
+        output_index: output_ref.index(),
+    }
+}
+
 fn parse_account_status_query(
     req: AccountStatusQuery,
 ) -> Result<(AccountId, spectrum_cardano_lib::OutputRef), ()> {
@@ -184,14 +294,18 @@ fn parse_account_ref(
     tx_hash: String,
     output_index: u64,
 ) -> Result<(AccountId, spectrum_cardano_lib::OutputRef), ()> {
-    let account_id_bytes = hex::decode(account_id).map_err(|_| ())?;
-    let account_id = AccountId::try_from_slice(&account_id_bytes).map_err(|_| ())?;
+    let account_id = parse_account_id(account_id)?;
     let tx_hash_bytes = hex::decode(tx_hash).map_err(|_| ())?;
     let tx_hash = cml_crypto::TransactionHash::from_raw_bytes(&tx_hash_bytes).map_err(|_| ())?;
     Ok((
         account_id,
         spectrum_cardano_lib::OutputRef::new(tx_hash, output_index),
     ))
+}
+
+fn parse_account_id(account_id: String) -> Result<AccountId, ()> {
+    let account_id_bytes = hex::decode(account_id).map_err(|_| ())?;
+    AccountId::try_from_slice(&account_id_bytes).map_err(|_| ())
 }
 
 fn bind_rejected(status: StatusCode, reason: &'static str) -> (StatusCode, Json<BindAccountResponse>) {
@@ -247,7 +361,8 @@ fn reason_for_admission_error(err: AdmissionError) -> &'static str {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use axum::extract::State;
+    use axum::body::Body;
+    use axum::extract::{Path, State};
     use axum::http::StatusCode;
     use axum::Json;
     use bloom_offchain_cardano::orders::green::{
@@ -268,6 +383,7 @@ mod tests {
     use spectrum_offchain::domain::Has;
     use spectrum_offchain::partitioning::Partitioned;
     use spectrum_offchain_cardano::deployment::DeployedScriptInfo;
+    use tower::ServiceExt;
     use type_equalities::IsEqual;
 
     use crate::account_index::AccountIndex;
@@ -656,5 +772,95 @@ mod tests {
 
         let intent = post_intent(State(state), Json(wire_intent(id))).await;
         assert_eq!(intent.0, StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn get_account_returns_current_account_summary_as_hex_dto() {
+        let id = account_id(41);
+        let (index, ctx) = indexed_account(id, 2_000_000, 0);
+        let response = get_account(State(test_state(index, ctx)), Path(hex::encode(id.bytes()))).await;
+
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1["status"], "found");
+        assert_eq!(response.1["reason"], serde_json::Value::Null);
+        assert_eq!(response.1["account"]["accountId"], hex::encode(id.bytes()));
+        assert_eq!(
+            response.1["account"]["currentOutputRef"]["txHash"],
+            hex::encode([1u8; 32])
+        );
+        assert_eq!(response.1["account"]["currentOutputRef"]["outputIndex"], 0);
+        assert_eq!(response.1["account"]["currentStoreRoot"], hex::encode([0u8; 32]));
+    }
+
+    #[tokio::test]
+    async fn get_account_returns_not_found_for_unknown_account() {
+        let id = account_id(42);
+        let response = get_account(
+            State(test_state(AccountIndex::default(), ctx())),
+            Path(hex::encode(id.bytes())),
+        )
+        .await;
+
+        assert_eq!(response.0, StatusCode::NOT_FOUND);
+        assert_eq!(response.1["status"], "notFound");
+        assert_eq!(response.1["reason"], "accountNotFound");
+        assert_eq!(response.1["account"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn get_account_rejects_malformed_account_id() {
+        let response = get_account(
+            State(test_state(AccountIndex::default(), ctx())),
+            Path("not-hex".to_string()),
+        )
+        .await;
+
+        assert_eq!(response.0, StatusCode::BAD_REQUEST);
+        assert_eq!(response.1["reason"], "malformedAccountId");
+    }
+
+    #[tokio::test]
+    async fn get_monitoring_summary_returns_sanitized_counts() {
+        let response = get_monitoring_summary(State(test_state(AccountIndex::default(), ctx()))).await;
+
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1["status"], "ok");
+        assert_eq!(response.1["accounts"]["currentAccounts"], 0);
+        assert_eq!(response.1["accounts"]["pendingAccounts"], 0);
+    }
+
+    #[tokio::test]
+    async fn get_monitoring_readiness_returns_api_readiness() {
+        let response = get_monitoring_readiness().await;
+
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1["status"], "ok");
+        assert_eq!(response.1["service"], "green-order-agent");
+        assert_eq!(response.1["apiVersion"], 1);
+        assert_eq!(response.1["accountIndex"], "available");
+    }
+
+    #[tokio::test]
+    async fn router_keeps_legacy_accounts_status_route_before_account_id_route() {
+        let id = account_id(43);
+        let (index, ctx) = indexed_account(id, 2_000_000, 0);
+        let app = router(test_state(index, ctx));
+        let uri = format!(
+            "/accounts/status?accountId={}&txHash={}&outputIndex=0",
+            hex::encode(id.bytes()),
+            hex::encode([1u8; 32]),
+        );
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

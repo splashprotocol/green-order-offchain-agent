@@ -38,3 +38,4 @@ async-trait = "0.1"
 
 [dev-dependencies]
 spectrum-offchain-cardano = { version = "1.0.0", path = "../spectrum-offchain-cardano" }
+tower = "0.5"

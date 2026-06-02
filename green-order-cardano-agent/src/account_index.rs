@@ -43,6 +43,24 @@ pub struct AccountStatus {
     pub predicted: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct AccountSummary {
+    pub account_id: AccountId,
+    pub current_output_ref: Option<OutputRef>,
+    pub current_store_root: Option<[u8; 32]>,
+    pub pending: bool,
+    pub persisted_outputs: usize,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct AccountIndexSummary {
+    pub current_accounts: usize,
+    pub pending_accounts: usize,
+    pub unbound_outputs: usize,
+    pub predicted_outputs: usize,
+    pub persisted_outputs: usize,
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum AccountBindingError {
     AlreadyBound,
@@ -109,6 +127,36 @@ impl AccountIndex {
         self.by_account_id
             .get(&account_id)
             .map(|account| account.store.root())
+    }
+
+    pub fn account_summary(&self, account_id: AccountId) -> Option<AccountSummary> {
+        let current = self.by_account_id.get(&account_id);
+        let pending = self.pending_by_account_id.contains(&account_id);
+        let persisted_outputs = self
+            .persisted_by_output_ref
+            .values()
+            .filter(|(persisted_id, _)| *persisted_id == account_id)
+            .count();
+        if current.is_none() && !pending && persisted_outputs == 0 {
+            return None;
+        }
+        Some(AccountSummary {
+            account_id,
+            current_output_ref: current.map(|account| account.utxo.reference()),
+            current_store_root: current.map(|account| account.store.root()),
+            pending,
+            persisted_outputs,
+        })
+    }
+
+    pub fn summary(&self) -> AccountIndexSummary {
+        AccountIndexSummary {
+            current_accounts: self.by_account_id.len(),
+            pending_accounts: self.pending_by_account_id.len(),
+            unbound_outputs: self.unbound_by_output_ref.len(),
+            predicted_outputs: self.predicted_by_output_ref.len(),
+            persisted_outputs: self.persisted_by_output_ref.len(),
+        }
     }
 
     pub fn account_status(&self, account_id: AccountId, output_ref: OutputRef) -> AccountStatus {
@@ -1266,6 +1314,92 @@ mod tests {
         assert!(!current.unbound);
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn account_summary_reports_current_account_reference_and_store_root() {
+        let id = account_id(91);
+        let output_ref = output_ref(91);
+        let output = dummy_output(2_000_000);
+        let mut index = AccountIndex::default();
+        index.observe_created_or_updated(account_utxo_with_root(output_ref, output, [0; 32]));
+        index.bind_external_account_id(id, output_ref).unwrap();
+
+        let summary = index.account_summary(id).unwrap();
+
+        assert_eq!(summary.account_id, id);
+        assert_eq!(summary.current_output_ref, Some(output_ref));
+        assert_eq!(summary.current_store_root, Some([0; 32]));
+        assert!(!summary.pending);
+        assert_eq!(summary.persisted_outputs, 0);
+    }
+
+    #[test]
+    fn account_summary_reports_pending_account_without_current_output() {
+        let id = account_id(92);
+        let old_ref = output_ref(92);
+        let new_ref = output_ref(93);
+        let mut index = AccountIndex::default();
+
+        index.mark_pending_update(id, old_ref, new_ref, dummy_output(2_100_000));
+
+        let summary = index.account_summary(id).unwrap();
+
+        assert_eq!(summary.account_id, id);
+        assert_eq!(summary.current_output_ref, None);
+        assert_eq!(summary.current_store_root, None);
+        assert!(summary.pending);
+        assert_eq!(summary.persisted_outputs, 0);
+    }
+
+    #[test]
+    fn account_summary_reports_persisted_account_before_observation() {
+        let id = account_id(93);
+        let output_ref = output_ref(94);
+        let output = dummy_output(2_000_000);
+        let path = std::env::temp_dir().join(format!(
+            "green-account-store-test-{}-summary.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let mut index = AccountIndex::with_persistence_path(path.clone());
+            index.bind_indexed(
+                id,
+                IndexedAccount {
+                    utxo: FinalizedTxOut::new(output, output_ref),
+                    store: crate::account_store::AccountStore::empty(),
+                },
+            );
+        }
+
+        let reloaded = AccountIndex::with_persistence_path(path.clone());
+        let summary = reloaded.account_summary(id).unwrap();
+
+        assert_eq!(summary.account_id, id);
+        assert_eq!(summary.current_output_ref, None);
+        assert_eq!(summary.current_store_root, None);
+        assert!(!summary.pending);
+        assert_eq!(summary.persisted_outputs, 1);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn account_summary_returns_none_for_unknown_account() {
+        assert!(AccountIndex::default().account_summary(account_id(94)).is_none());
+    }
+
+    #[test]
+    fn account_index_summary_counts_empty_state() {
+        let summary = AccountIndex::default().summary();
+
+        assert_eq!(summary.current_accounts, 0);
+        assert_eq!(summary.pending_accounts, 0);
+        assert_eq!(summary.unbound_outputs, 0);
+        assert_eq!(summary.predicted_outputs, 0);
+        assert_eq!(summary.persisted_outputs, 0);
     }
 
     #[test]
