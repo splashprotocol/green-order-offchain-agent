@@ -3,6 +3,7 @@ import { assert, assertStringIncludes } from "https://deno.land/std@0.224.0/asse
 const runner = await Deno.readTextFile("run-preprod-e2e.sh");
 const bindAccountScript = await Deno.readTextFile("03-create-aleph-account-and-bind.ts");
 const walletScript = await Deno.readTextFile("00-prepare-preprod-wallets.ts");
+const waitForWalletFundingScript = await Deno.readTextFile("00-wait-for-preprod-wallet-funding.ts");
 const operatorFundingScript = await Deno.readTextFile("07-prepare-operator-funding.ts");
 
 Deno.test("run-preprod-e2e can launch and stop a local green-order agent", () => {
@@ -38,6 +39,11 @@ Deno.test("run-preprod-e2e prepares wallet env before operator funding", () => {
   assert(walletIndex < fundingIndex, "wallet env must be available before operator funding");
 });
 
+Deno.test("run-preprod-e2e checks batcher funding even when wallet env already exists", () => {
+  assertStringIncludes(runner, "batcher wallet env available; checking funding");
+  assertStringIncludes(runner, "00-wait-for-preprod-wallet-funding.ts");
+});
+
 Deno.test("run-preprod-e2e asks for Blockfrost before falling back to Koios", () => {
   const providerIndex = runner.indexOf("prepare_preprod_provider_env");
   const walletIndex = runner.indexOf("prepare_preprod_wallet_env");
@@ -53,6 +59,7 @@ Deno.test("run-preprod-e2e asks for Blockfrost before falling back to Koios", ()
 
 Deno.test("wallet preparation requests enough batcher tADA for auditor runs", () => {
   assertStringIncludes(walletScript, 'E2E_BATCHER_REQUESTED_ADA")?.trim() || "400"');
+  assertStringIncludes(waitForWalletFundingScript, 'E2E_BATCHER_REQUIRED_LOVELACE")?.trim() || "400000000"');
 });
 
 Deno.test("operator funding script retries provider UTxO lookups", () => {

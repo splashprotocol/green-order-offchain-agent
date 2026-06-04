@@ -3,7 +3,7 @@ import { loadPreprodEnv, lovelaceToAda, preprodProvider } from "./src/provider.t
 await loadPreprodEnv();
 
 const address = requiredEnv("BATCHER_ADDRESS");
-const requiredLovelace = BigInt(Deno.env.get("E2E_BATCHER_REQUIRED_LOVELACE")?.trim() || "350000000");
+const requiredLovelace = BigInt(Deno.env.get("E2E_BATCHER_REQUIRED_LOVELACE")?.trim() || "400000000");
 const intervalMs = Number(Deno.env.get("E2E_BATCHER_FUNDING_POLL_MS")?.trim() || "15000");
 const timeoutMs = Number(Deno.env.get("E2E_BATCHER_FUNDING_TIMEOUT_MS")?.trim() || "3600000");
 const startedAt = Date.now();

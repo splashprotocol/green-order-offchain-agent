@@ -94,15 +94,15 @@ has_preprod_wallet_env() {
 
 prepare_preprod_wallet_env() {
   if has_preprod_wallet_env; then
-    return 0
+    echo "batcher wallet env available; checking funding"
+  else
+    echo "wallet env missing; generating local preprod wallet secrets"
+    deno run --no-lock --allow-read --allow-write --allow-env 00-prepare-preprod-wallets.ts
+    local batcher_address
+    batcher_address="$(sed -n 's/^BATCHER_ADDRESS=//p' "${WALLET_ENV_PATH:-.env.wallets}" | head -n 1)"
+    echo "Send at least ${E2E_BATCHER_REQUESTED_ADA:-400} tADA to:"
+    echo "$batcher_address"
   fi
-
-  echo "wallet env missing; generating local preprod wallet secrets"
-  deno run --no-lock --allow-read --allow-write --allow-env 00-prepare-preprod-wallets.ts
-  local batcher_address
-  batcher_address="$(sed -n 's/^BATCHER_ADDRESS=//p' "${WALLET_ENV_PATH:-.env.wallets}" | head -n 1)"
-  echo "Send at least ${E2E_BATCHER_REQUESTED_ADA:-400} tADA to:"
-  echo "$batcher_address"
   deno run --no-lock --allow-net --allow-read --allow-env 00-wait-for-preprod-wallet-funding.ts
 }
 
