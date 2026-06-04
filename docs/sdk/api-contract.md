@@ -117,9 +117,37 @@ Returns Green Order HTTP API readiness only.
 This endpoint does not claim Cardano node sync, explorer availability, funding
 readiness, or end-to-end execution readiness.
 
-## Optional HMAC Headers
+## HMAC Headers
 
-If the operator exposes the agent behind HTTPS, SDK requests can include:
+If the agent config contains `greenOrdersHmacAuth`, all SDK-facing green-order
+HTTP routes require HMAC headers. The TypeScript SDK adds these headers to every
+`GreenOrderClient` request when the client is created with `hmac`.
+
+Agent config:
+
+```json
+{
+  "greenOrdersHmacAuth": {
+    "secret": "<shared-secret-from-env-or-local-config>",
+    "keyId": "integration-a",
+    "maxSkewMs": 300000
+  }
+}
+```
+
+Protected routes:
+
+- `POST /intents`
+- `POST /accounts/bind`
+- `GET /accounts/status`
+- `GET /accounts/:account_id`
+- `GET /monitoring/summary`
+- `GET /monitoring/readiness`
+
+The separate health endpoint remains outside this router so infrastructure can
+probe it independently.
+
+Required headers:
 
 - `x-go-key-id`
 - `x-go-timestamp`
@@ -136,3 +164,6 @@ TIMESTAMP_MS
 NONCE
 BODY_SHA256_HEX
 ```
+
+The agent rejects missing headers, stale timestamps, mismatched body hashes, and
+invalid signatures with `401`.

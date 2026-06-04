@@ -1,15 +1,21 @@
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use axum::body::{to_bytes, Body};
 use axum::extract::Path;
 use axum::extract::Query;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{Request, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use cml_crypto::RawBytesEncoding;
 use futures::channel::mpsc;
+use hmac::{Hmac, Mac};
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use spectrum_offchain::domain::Has;
 use spectrum_offchain::partitioning::Partitioned;
 use spectrum_offchain_cardano::data::pair::PairId;
@@ -29,6 +35,21 @@ pub struct HttpIntentState<C> {
     pub ctx: C,
     pub config: GreenOrdersConfig,
     pub events: Partitioned<4, PairId, mpsc::Sender<GreenIntentEvent>>,
+    pub hmac_auth: Option<HmacAuthConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HmacAuthConfig {
+    pub secret: String,
+    #[serde(default)]
+    pub key_id: Option<String>,
+    #[serde(default = "default_hmac_max_skew_ms")]
+    pub max_skew_ms: u64,
+}
+
+fn default_hmac_max_skew_ms() -> u64 {
+    300_000
 }
 
 #[derive(Serialize)]
@@ -42,14 +63,108 @@ pub fn router<C>(state: HttpIntentState<C>) -> Router
 where
     C: Has<DeployedScriptInfo<{ ALEPH_ACCOUNT_VALIDATOR }>> + Clone + Send + Sync + 'static,
 {
-    Router::new()
+    let hmac_auth = state.hmac_auth.clone();
+    let router = Router::new()
         .route("/intents", post(post_intent::<C>))
         .route("/accounts/bind", post(post_bind_account::<C>))
         .route("/accounts/status", get(get_account_status::<C>))
         .route("/accounts/:account_id", get(get_account::<C>))
         .route("/monitoring/summary", get(get_monitoring_summary::<C>))
         .route("/monitoring/readiness", get(get_monitoring_readiness))
-        .with_state(state)
+        .with_state(state);
+    match hmac_auth {
+        Some(hmac_auth) => router.layer(middleware::from_fn_with_state(hmac_auth, verify_hmac_request)),
+        None => router,
+    }
+}
+
+async fn verify_hmac_request(
+    State(config): State<HmacAuthConfig>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, Response> {
+    let (parts, body) = request.into_parts();
+    let body = to_bytes(body, 1024 * 1024)
+        .await
+        .map_err(|_| hmac_rejected("bodyReadFailed"))?;
+    verify_hmac_parts(&config, &parts.method, &parts.uri, &parts.headers, &body)?;
+    Ok(next.run(Request::from_parts(parts, Body::from(body))).await)
+}
+
+fn verify_hmac_parts(
+    config: &HmacAuthConfig,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    headers: &axum::http::HeaderMap,
+    body: &[u8],
+) -> Result<(), Response> {
+    if config.secret.is_empty() {
+        return Err(hmac_rejected("emptyHmacSecret"));
+    }
+    if let Some(expected_key_id) = &config.key_id {
+        if header_str(headers, "x-go-key-id")? != expected_key_id {
+            return Err(hmac_rejected("invalidHmacKeyId"));
+        }
+    }
+    let timestamp = header_str(headers, "x-go-timestamp")?;
+    verify_hmac_timestamp(timestamp, config.max_skew_ms)?;
+    let nonce = header_str(headers, "x-go-nonce")?;
+    if nonce.is_empty() {
+        return Err(hmac_rejected("invalidHmacNonce"));
+    }
+    let body_hash = hex::encode(Sha256::digest(body));
+    if header_str(headers, "x-go-body-sha256")? != body_hash {
+        return Err(hmac_rejected("invalidHmacBodyHash"));
+    }
+    let signature = header_str(headers, "x-go-signature")?
+        .strip_prefix("hmac-sha256=")
+        .ok_or_else(|| hmac_rejected("invalidHmacSignature"))?;
+    let signature = hex::decode(signature).map_err(|_| hmac_rejected("invalidHmacSignature"))?;
+    let path_and_query = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or(uri.path());
+    let canonical = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        method.as_str().to_uppercase(),
+        path_and_query,
+        timestamp,
+        nonce,
+        body_hash
+    );
+    let mut mac = Hmac::<Sha256>::new_from_slice(config.secret.as_bytes())
+        .map_err(|_| hmac_rejected("invalidHmacSecret"))?;
+    mac.update(canonical.as_bytes());
+    mac.verify_slice(&signature)
+        .map_err(|_| hmac_rejected("invalidHmacSignature"))
+}
+
+fn verify_hmac_timestamp(timestamp: &str, max_skew_ms: u64) -> Result<(), Response> {
+    let timestamp = timestamp
+        .parse::<u128>()
+        .map_err(|_| hmac_rejected("invalidHmacTimestamp"))?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| hmac_rejected("invalidHmacTimestamp"))?
+        .as_millis();
+    let skew = now.abs_diff(timestamp);
+    if skew > max_skew_ms as u128 {
+        return Err(hmac_rejected("staleHmacTimestamp"));
+    }
+    Ok(())
+}
+
+fn header_str<'a>(headers: &'a axum::http::HeaderMap, name: &str) -> Result<&'a str, Response> {
+    headers
+        .get(name)
+        .ok_or_else(|| hmac_rejected("missingHmacHeader"))?
+        .to_str()
+        .map_err(|_| hmac_rejected("invalidHmacHeader"))
+}
+
+fn hmac_rejected(reason: &'static str) -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({"status": "rejected", "reason": reason})),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -377,6 +492,8 @@ mod tests {
     use futures::channel::mpsc;
     use futures::FutureExt;
     use futures::StreamExt;
+    use hmac::{Hmac, Mac};
+    use sha2::{Digest, Sha256};
     use spectrum_cardano_lib::ex_units::ExUnits;
     use spectrum_cardano_lib::plutus_data::IntoPlutusData;
     use spectrum_cardano_lib::{AssetClass, AssetName, OutputRef, Token};
@@ -494,6 +611,7 @@ mod tests {
             ctx,
             config: GreenOrdersConfig::default(),
             events,
+            hmac_auth: None,
         }
     }
 
@@ -572,6 +690,7 @@ mod tests {
             ctx,
             config: GreenOrdersConfig::default(),
             events,
+            hmac_auth: None,
         };
 
         let (status, _) = post_intent(State(state), Json(wire_intent(id))).await;
@@ -588,6 +707,7 @@ mod tests {
             ctx: ctx(),
             config: GreenOrdersConfig::default(),
             events,
+            hmac_auth: None,
         };
 
         let (status, _) = post_intent(State(state), Json(wire_intent(account_id(2)))).await;
@@ -606,6 +726,7 @@ mod tests {
             ctx,
             config: GreenOrdersConfig::default(),
             events,
+            hmac_auth: None,
         };
 
         let (status, _) = post_intent(State(state), Json(path_auth_wire_intent(id))).await;
@@ -625,6 +746,7 @@ mod tests {
             ctx,
             config: GreenOrdersConfig::default(),
             events,
+            hmac_auth: None,
         };
 
         let (status, _) = post_intent(State(state), Json(wire_intent(id))).await;
@@ -757,6 +879,7 @@ mod tests {
             ctx,
             config: GreenOrdersConfig::default(),
             events,
+            hmac_auth: None,
         };
 
         let bind = post_bind_account(
@@ -841,6 +964,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn router_allows_unsigned_sdk_routes_when_hmac_is_not_configured() {
+        let app = router(test_state(AccountIndex::default(), ctx()));
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/monitoring/readiness")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn router_rejects_unsigned_sdk_routes_when_hmac_is_configured() {
+        let mut state = test_state(AccountIndex::default(), ctx());
+        state.hmac_auth = Some(HmacAuthConfig {
+            secret: "test-secret".to_string(),
+            key_id: Some("preprod".to_string()),
+            max_skew_ms: 300_000,
+        });
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/monitoring/readiness")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn router_accepts_sdk_routes_with_valid_hmac_headers() {
+        let mut state = test_state(AccountIndex::default(), ctx());
+        state.hmac_auth = Some(HmacAuthConfig {
+            secret: "test-secret".to_string(),
+            key_id: Some("preprod".to_string()),
+            max_skew_ms: 300_000,
+        });
+        let app = router(state);
+        let headers = hmac_headers("GET", "/monitoring/readiness", "", "test-secret", "preprod");
+
+        let mut builder = axum::http::Request::builder().uri("/monitoring/readiness");
+        for (name, value) in headers {
+            builder = builder.header(name, value);
+        }
+        let response = app.oneshot(builder.body(Body::empty()).unwrap()).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn router_rejects_sdk_routes_with_invalid_hmac_body_hash() {
+        let mut state = test_state(AccountIndex::default(), ctx());
+        state.hmac_auth = Some(HmacAuthConfig {
+            secret: "test-secret".to_string(),
+            key_id: Some("preprod".to_string()),
+            max_skew_ms: 300_000,
+        });
+        let app = router(state);
+        let mut headers = hmac_headers("GET", "/monitoring/readiness", "", "test-secret", "preprod");
+        headers.retain(|(name, _)| *name != "x-go-body-sha256");
+        headers.push(("x-go-body-sha256", hex::encode([0u8; 32])));
+
+        let mut builder = axum::http::Request::builder().uri("/monitoring/readiness");
+        for (name, value) in headers {
+            builder = builder.header(name, value);
+        }
+        let response = app.oneshot(builder.body(Body::empty()).unwrap()).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn router_rejects_sdk_routes_with_invalid_hmac_signature() {
+        let mut state = test_state(AccountIndex::default(), ctx());
+        state.hmac_auth = Some(HmacAuthConfig {
+            secret: "test-secret".to_string(),
+            key_id: Some("preprod".to_string()),
+            max_skew_ms: 300_000,
+        });
+        let app = router(state);
+        let mut headers = hmac_headers("GET", "/monitoring/readiness", "", "wrong-secret", "preprod");
+        headers.retain(|(name, _)| *name != "x-go-body-sha256");
+        headers.push(("x-go-body-sha256", hex::encode(Sha256::digest(b""))));
+
+        let mut builder = axum::http::Request::builder().uri("/monitoring/readiness");
+        for (name, value) in headers {
+            builder = builder.header(name, value);
+        }
+        let response = app.oneshot(builder.body(Body::empty()).unwrap()).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn router_keeps_legacy_accounts_status_route_before_account_id_route() {
         let id = account_id(43);
         let (index, ctx) = indexed_account(id, 2_000_000, 0);
@@ -862,5 +1089,39 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    fn hmac_headers(
+        method: &str,
+        path_and_query: &str,
+        body: &str,
+        secret: &str,
+        key_id: &str,
+    ) -> Vec<(&'static str, String)> {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            .to_string();
+        let nonce = "nonce-1".to_string();
+        let body_hash = hex::encode(Sha256::digest(body.as_bytes()));
+        let canonical = format!(
+            "{}\n{}\n{}\n{}\n{}",
+            method.to_uppercase(),
+            path_and_query,
+            timestamp,
+            nonce,
+            body_hash
+        );
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(canonical.as_bytes());
+        let signature = hex::encode(mac.finalize().into_bytes());
+        vec![
+            ("x-go-key-id", key_id.to_string()),
+            ("x-go-timestamp", timestamp),
+            ("x-go-nonce", nonce),
+            ("x-go-body-sha256", body_hash),
+            ("x-go-signature", format!("hmac-sha256={signature}")),
+        ]
     }
 }

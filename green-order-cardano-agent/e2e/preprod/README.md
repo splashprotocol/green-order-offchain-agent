@@ -22,8 +22,9 @@ If `BLOCKFROST_PROJECT_ID` is not set in the environment, `.env`, `.env.wallets`
 instead. The prompted value is exported only for that process and is not written to committed files.
 
 `AGENT_HMAC_SECRET` and `AGENT_HMAC_KEY_ID` are not required for the local preprod agent. If they are set, the
-E2E harness passes them to the TypeScript SDK and the SDK signs agent HTTP requests with HMAC headers. Do not
-hardcode these values in scripts or committed config.
+E2E harness writes them into the run-local agent config as `greenOrdersHmacAuth` and passes them to the
+TypeScript SDK, so the agent verifies HMAC and the SDK signs every agent HTTP request. Do not hardcode these
+values in scripts or committed config.
 
 To create local preprod wallets for the agent/batcher and reference-script deployment:
 

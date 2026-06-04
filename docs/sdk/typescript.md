@@ -58,5 +58,5 @@ higher-level SDK account summary by account id.
 `getMonitoringReadiness` reports HTTP API handler readiness only. It does not
 represent chain sync, explorer health, funding, or full execution readiness.
 
-These Markdown files are the source material for the GitBook publication
-required by the Catalyst milestone.
+These Markdown files are the public SDK documentation for the Catalyst
+milestone.

@@ -73,6 +73,13 @@ export async function createPartialAgentConfig(
       httpListenAddr,
     };
   }
+  const agentHmacSecret = Deno.env.get("AGENT_HMAC_SECRET")?.trim();
+  if (agentHmacSecret) {
+    config.greenOrdersHmacAuth = {
+      secret: agentHmacSecret,
+      keyId: Deno.env.get("AGENT_HMAC_KEY_ID")?.trim() || undefined,
+    };
+  }
   if (options.chainSyncPoint) {
     const point = { Specific: [options.chainSyncPoint.slot, options.chainSyncPoint.hash] };
     config.chainSync.startingPoint = point;

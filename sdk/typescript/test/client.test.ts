@@ -141,3 +141,33 @@ test("queries green-order monitoring readiness", async () => {
     service: "green-order-agent",
   });
 });
+
+test("adds hmac headers to every sdk request when configured", async () => {
+  const seen: Array<{ url: string; init: RequestInit }> = [];
+  const client = new GreenOrderClient({
+    baseUrl: "http://127.0.0.1:9031",
+    hmac: { secret: "test-secret", keyId: "preprod" },
+    fetch: async (url, init) => {
+      seen.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+    },
+  });
+
+  await client.submitIntent({});
+  await client.bindAccount({ accountId: "aa", txHash: "bb", outputIndex: 0 });
+  await client.getAccountStatus({ accountId: "aa", txHash: "bb", outputIndex: 0 });
+  await client.getAccount("aa".repeat(32));
+  await client.getReadiness();
+  await client.getMonitoringSummary();
+  await client.getMonitoringReadiness();
+
+  assert.equal(seen.length, 7);
+  for (const call of seen) {
+    const headers = call.init.headers as Record<string, string>;
+    assert.equal(headers["x-go-key-id"], "preprod", call.url);
+    assert.match(headers["x-go-timestamp"], /^[0-9]+$/, call.url);
+    assert.match(headers["x-go-nonce"], /.+/, call.url);
+    assert.match(headers["x-go-body-sha256"], /^[0-9a-f]{64}$/, call.url);
+    assert.match(headers["x-go-signature"], /^hmac-sha256=[0-9a-f]{64}$/, call.url);
+  }
+});

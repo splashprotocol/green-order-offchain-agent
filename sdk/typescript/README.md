@@ -64,10 +64,12 @@ const readiness = await client.getMonitoringReadiness();
 claim Cardano node sync, explorer availability, funding readiness, or full
 execution readiness.
 
-## Optional HMAC Request Signing
+## HMAC Request Signing
 
-HMAC protects the operator HTTP API. It does not replace the green-order intent
-signature, which authorizes the order itself.
+HMAC protects the operator HTTP API when the green-order agent is configured
+with `greenOrdersHmacAuth`. It does not replace the green-order intent
+signature, which authorizes the order itself. When `hmac` is set on the client,
+every SDK request includes the HMAC headers expected by the agent.
 
 ```ts
 const client = new GreenOrderClient({

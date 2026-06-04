@@ -249,6 +249,7 @@ async fn main() {
             ctx: GreenScriptHashes::from(&green_deployment),
             config: config.green_orders,
             events: intent_pair_upd_snd.clone(),
+            hmac_auth: config.green_orders_hmac_auth.clone(),
         });
         tokio::spawn(async move {
             let listener = tokio::net::TcpListener::bind(http_listen_addr)
