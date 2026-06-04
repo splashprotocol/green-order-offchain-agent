@@ -128,6 +128,29 @@ prepare_preprod_wallet_env() {
   deno run --no-lock --allow-net --allow-read --allow-env 00-wait-for-preprod-wallet-funding.ts
 }
 
+prepare_green_order_hmac_env() {
+  if [[ "$START_GREEN_ORDER_AGENT" != "1" ]]; then
+    return 0
+  fi
+
+  mkdir -p .state
+  local hmac_env_path="${E2E_HMAC_ENV_PATH:-.state/preprod-hmac.env}"
+  local hmac_secret
+  hmac_secret="$(deno eval --no-lock 'const bytes = crypto.getRandomValues(new Uint8Array(32)); console.log(Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""));')"
+
+  export AGENT_HMAC_SECRET="$hmac_secret"
+  export AGENT_HMAC_KEY_ID="preprod-e2e"
+
+  (
+    umask 077
+    {
+      printf 'AGENT_HMAC_SECRET=%s\n' "$AGENT_HMAC_SECRET"
+      printf 'AGENT_HMAC_KEY_ID=%s\n' "$AGENT_HMAC_KEY_ID"
+    } >"$hmac_env_path"
+  )
+  echo "generated run-local agent HMAC auth: $hmac_env_path"
+}
+
 init_agent_endpoints() {
   if [[ -z "${AGENT_HEALTH_URL:-}" && -z "${AGENT_HEALTH_LISTEN_ADDR:-}" ]]; then
     local health_port
@@ -276,6 +299,7 @@ start_green_order_agent() {
 
   init_agent_endpoints
   require_agent_endpoint_free
+  prepare_green_order_hmac_env
   prepare_green_order_agent_config
   clean_forced_green_order_agent_state
 

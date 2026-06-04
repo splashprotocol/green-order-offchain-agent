@@ -30,28 +30,42 @@ SDK-based preprod integration evidence:
 - SDK-based account binding script: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/green-order-cardano-agent/e2e/preprod/03-create-aleph-account-and-bind.ts
 - SDK-based full-fill submit script: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/green-order-cardano-agent/e2e/preprod/04-submit-green-order-smoke.ts
 - SDK monitoring query script that calls `getMonitoringReadiness`, `getMonitoringSummary`, `getAccount`, and `getAccountStatus`: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/green-order-cardano-agent/e2e/preprod/11-query-agent-via-sdk.ts
+- SDK negative HMAC probe that intentionally signs with the wrong secret and requires `403 Forbidden`: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/green-order-cardano-agent/e2e/preprod/12-query-agent-with-bad-hmac.ts
 
-Preprod SDK execution evidence from the current local SDK E2E run:
+Preprod SDK execution evidence from the latest local SDK E2E run:
 - Network: Cardano preprod
-- Account id: `c1310acb16606e95128872420461c212087e6c268aa8228017073ee68c25903e`
-- Initial Aleph account output observed by the agent: `b07aba444720dcfb9ce6e7ba0359607e34faba64e9579b97c12676009a9cf303#0`
+- Run mode: forced fresh E2E state with the funded preprod batcher wallet reused
+- HMAC mode: enabled for SDK requests to the Green Order agent
+- Account id: `eda3e61ab5b686850f512170b0957f5f0480c74bf1cb59694d3919e79f823288`
+- Initial Aleph account creation transaction: `05c7cd253f69989a01e3ad09c567c434c073ed37334a040272153b3b86fe0561`
+- Initial Aleph account output observed by the agent: `05c7cd253f69989a01e3ad09c567c434c073ed37334a040272153b3b86fe0561#0`
 - Operator funding transaction: `daabeb39eb621ca9b93ac1794bd48d15f2aece4da5ee989ca3b84ade44548426`
-- Full-fill execution transaction built by the agent: `f42c3c3c3421662eab6157ad43df8c5d7aa0a7f02e1babd8270eb8e5a6e5235f`
-- Successor Aleph account output after execution: `f42c3c3c3421662eab6157ad43df8c5d7aa0a7f02e1babd8270eb8e5a6e5235f#0`
-- Full-fill submitted intent digest: `da5f8568be3d34c7ab782486fae335c8609dc3cd2333e4be33766cdd24907e00`
+- Royalty V1 pool creation transaction: `b5dbe13f0cae051b9a3a91f7f4d608bd6bd01fba58f33e816835485e6222075b`
+- Separator funding transaction: `294316acb7662c5ae9df3134ea180ca9830b8211b85af6dbb68cc75a84cd00f5`
+- Full-fill submitted intent digest: `45990670d8e2dc9ec8d37b039358819276cd497a524929b8bce14aec3d4e018b`
+- Full-fill execution transaction built by the agent: `07103b7658edaa1853b8ee0ca6484e495d455c8509502d1c64d4c26dd5508b26`
+- Successor Aleph account output after execution: `07103b7658edaa1853b8ee0ca6484e495d455c8509502d1c64d4c26dd5508b26#0`
+- Successor Royalty V1 pool output after execution: `07103b7658edaa1853b8ee0ca6484e495d455c8509502d1c64d4c26dd5508b26#2`
+- SDK monitoring query result: readiness `status: ok`, account status `current: true`, `pending: false`, `persisted: false`, `predicted: false`, `unbound: false`
+- Negative HMAC probe result: `bad_hmac_check=passed`, `bad_hmac_status=403`, `bad_hmac_reason=invalidHmacSignature`
 - Public explorer links:
-  - https://preprod.cexplorer.io/tx/b07aba444720dcfb9ce6e7ba0359607e34faba64e9579b97c12676009a9cf303
+  - https://preprod.cexplorer.io/tx/05c7cd253f69989a01e3ad09c567c434c073ed37334a040272153b3b86fe0561
   - https://preprod.cexplorer.io/tx/daabeb39eb621ca9b93ac1794bd48d15f2aece4da5ee989ca3b84ade44548426
-  - https://preprod.cexplorer.io/tx/f42c3c3c3421662eab6157ad43df8c5d7aa0a7f02e1babd8270eb8e5a6e5235f
+  - https://preprod.cexplorer.io/tx/b5dbe13f0cae051b9a3a91f7f4d608bd6bd01fba58f33e816835485e6222075b
+  - https://preprod.cexplorer.io/tx/294316acb7662c5ae9df3134ea180ca9830b8211b85af6dbb68cc75a84cd00f5
+  - https://preprod.cexplorer.io/tx/07103b7658edaa1853b8ee0ca6484e495d455c8509502d1c64d4c26dd5508b26
 
 Auditor-style command to verify the SDK-based preprod flow:
 
 ```sh
 cd green-order-cardano-agent/e2e/preprod
-CARDANO_NODE_SOCKET_PATH=/absolute/path/to/preprod/node.socket FORCE_E2E_STATE=1 bash ./run-preprod-e2e.sh
+CARDANO_NODE_SOCKET_PATH=/absolute/path/to/preprod/node.socket \
+E2E_CHECK_BAD_HMAC=1 \
+FORCE_E2E_STATE=1 \
+bash ./run-preprod-e2e.sh
 ```
 
-The runner asks for a preprod Blockfrost project id when one is not already configured. Pressing Enter uses Koios. Secrets are read from the environment or generated ignored local files; the scripts do not hardcode API keys, wallet seeds, or private keys.
+The runner asks for a preprod Blockfrost project id when one is not already configured. Pressing Enter uses Koios. Secrets are read from the environment or generated ignored local files; the scripts do not hardcode API keys, wallet seeds, private keys, or HMAC secrets. For the run-local agent path, the runner generates a fresh HMAC secret for each run, stores it only in ignored `.state/preprod-hmac.env`, writes HMAC auth into the ignored local agent config with the fixed non-secret key id `preprod-e2e`, signs SDK requests, and verifies that an intentionally bad SDK HMAC request is rejected with `403 Forbidden`.
 
 Milestone Output 2 — Unit test coverage for the SDK
 
@@ -66,6 +80,7 @@ Evidence:
 - SDK test coverage documentation: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/sdk/test-coverage.md
 - E2E tests proving the runner builds the SDK before SDK use, starts/stops the agent, queries SDK monitoring after smoke execution, prompts for Blockfrost without hardcoding it, and isolates forced fresh wallet state: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/green-order-cardano-agent/e2e/preprod/tests/runner_agent_setup.test.ts
 - SDK response parser tests for monitoring and account status shapes: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/green-order-cardano-agent/e2e/preprod/tests/sdk_agent.test.ts
+- Agent route tests proving valid HMAC headers are accepted and unsigned, mismatched body-hash, and invalid-signature SDK requests are rejected with `403 Forbidden`: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/green-order-cardano-agent/src/http_intent_source.rs
 
 How the Acceptance Criteria can be verified:
 - Acceptance criterion 2 says the code must be covered with unit tests accessible through the open GitHub repository. Verify that the SDK test files above are visible in the public repository.
@@ -115,6 +130,7 @@ How the Acceptance Criteria can be verified:
 - Verify that `sdk/typescript/README.md` includes install, build/sign/submit, monitoring, HMAC request signing, and test instructions.
 
 Final link and sensitivity verification:
-- All GitHub and public preprod explorer links in this report were checked and returned HTTP `200`.
+- The public preprod explorer links in this report were checked and returned HTTP `200`.
+- The GitHub source links target the public `sdk-api` branch and PR #1. The current local `sdk-api` branch includes the latest HMAC validation commits; push the branch before submitting this report so the new source links, including the bad-HMAC E2E script, are observable by auditors.
 - This Proof of Achievement contains public repository links, public branch/commit identifiers, public preprod transaction hashes, public preprod account/pool identifiers, public asset ids, and test command output.
 - This Proof of Achievement does not include wallet seeds, private keys, Blockfrost API keys, HMAC secrets, local user paths, or raw local state files that contain secrets.

@@ -11,7 +11,6 @@ Copy `.env.example` to `.env` and fill:
 - `CARDANO_NODE_SOCKET_PATH`
 - `OPERATOR_KEY_HASH_HEX`, matching the running agent operator payment key hash
 - optionally `ACCOUNT_HOT_PRIVATE_KEY_HEX`
-- optionally `AGENT_HMAC_SECRET` and `AGENT_HMAC_KEY_ID`
 
 `CARDANO_NODE_SOCKET_PATH` must point to a running Cardano preprod node socket when starting the Rust agent.
 `06-deploy-aleph-reference-scripts.ts` also requires `ALEPH_BLUEPRINT_PATH` if Aleph reference scripts need to
@@ -21,10 +20,10 @@ If `BLOCKFROST_PROJECT_ID` is not set in the environment, `.env`, `.env.wallets`
 `run-preprod-e2e.sh` wrapper asks for a preprod Blockfrost project id at startup. Press Enter to use Koios
 instead. The prompted value is exported only for that process and is not written to committed files.
 
-`AGENT_HMAC_SECRET` and `AGENT_HMAC_KEY_ID` are not required for the local preprod agent. If they are set, the
-E2E harness writes them into the run-local agent config as `greenOrdersHmacAuth` and passes them to the
-TypeScript SDK, so the agent verifies HMAC and the SDK signs every agent HTTP request. Do not hardcode these
-values in scripts or committed config.
+The wrapper generates a fresh run-local HMAC secret for every local-agent run, stores it only in ignored
+`.state/preprod-hmac.env`, writes it into the generated agent config as `greenOrdersHmacAuth`, and passes it
+to the TypeScript SDK. The key id is the fixed non-secret label `preprod-e2e`. Do not hardcode HMAC secrets in
+scripts or committed config.
 The runner also submits one SDK monitoring request with an intentionally wrong HMAC secret and expects
 `403 Forbidden`; successful runs print `bad_hmac_check=passed`.
 

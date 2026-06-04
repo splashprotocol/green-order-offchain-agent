@@ -44,6 +44,19 @@ Deno.test("run-preprod-e2e checks batcher funding even when wallet env already e
   assertStringIncludes(runner, "00-wait-for-preprod-wallet-funding.ts");
 });
 
+Deno.test("run-preprod-e2e generates HMAC auth for each local agent run", () => {
+  const hmacIndex = runner.indexOf("prepare_green_order_hmac_env");
+  const configIndex = runner.indexOf("prepare_green_order_agent_config");
+
+  assertStringIncludes(runner, 'AGENT_HMAC_KEY_ID="preprod-e2e"');
+  assertStringIncludes(runner, "AGENT_HMAC_SECRET");
+  assertStringIncludes(runner, "crypto.getRandomValues(new Uint8Array(32))");
+  assertStringIncludes(runner, ".state/preprod-hmac.env");
+  assert(hmacIndex >= 0, "runner should prepare generated HMAC auth");
+  assert(configIndex >= 0, "runner should write generated agent config");
+  assert(hmacIndex < configIndex, "HMAC auth must be exported before agent config generation");
+});
+
 Deno.test("run-preprod-e2e force mode uses run-local generated wallets", () => {
   assertStringIncludes(runner, "prepare_forced_wallet_state");
   assertStringIncludes(runner, 'WALLET_ENV_PATH="${WALLET_ENV_PATH:-.state/preprod-wallets.env}"');
