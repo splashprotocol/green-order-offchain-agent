@@ -1,6 +1,7 @@
 import { assert, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const runner = await Deno.readTextFile("run-preprod-e2e.sh");
+const bindAccountScript = await Deno.readTextFile("03-create-aleph-account-and-bind.ts");
 
 Deno.test("run-preprod-e2e can launch and stop a local green-order agent", () => {
   assertStringIncludes(runner, "START_GREEN_ORDER_AGENT");
@@ -36,4 +37,10 @@ Deno.test("run-preprod-e2e queries SDK monitoring after smoke execution", () => 
   assert(smokeIndex >= 0, "runner should execute the smoke script");
   assert(queryIndex >= 0, "runner should query SDK monitoring");
   assert(smokeIndex < queryIndex, "SDK monitoring query must run after smoke execution");
+});
+
+Deno.test("account binding script logs agent observation progress", () => {
+  assertStringIncludes(bindAccountScript, "waitingForAgentObservation");
+  assertStringIncludes(bindAccountScript, "ACCOUNT_BIND_PROGRESS_EVERY");
+  assertStringIncludes(bindAccountScript, "getMonitoringSummary");
 });

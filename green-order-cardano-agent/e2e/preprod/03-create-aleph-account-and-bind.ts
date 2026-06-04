@@ -114,10 +114,34 @@ const sdkClient = await loadGreenOrderSdkClient(config.agentUrl, {
   secret: config.agentHmacSecret,
   keyId: config.agentHmacKeyId,
 });
+let bindAttempts = 0;
+const bindProgressEvery = Number(Deno.env.get("ACCOUNT_BIND_PROGRESS_EVERY") ?? "10");
 await waitFor("agent account binding", async () => {
   const body = await bindAccountViaSdk(sdkClient, pending.accountId, pending.outputRef as OutputRef).catch(
-    (error) => {
-      if (String(error).includes("outputNotObserved")) return undefined;
+    async (error) => {
+      if (String(error).includes("outputNotObserved")) {
+        bindAttempts += 1;
+        if (bindProgressEvery > 0 && bindAttempts % bindProgressEvery === 0) {
+          const monitoring = await sdkClient.getMonitoringSummary().catch((monitoringError) => ({
+            status: "unavailable",
+            reason: String(monitoringError),
+          }));
+          console.log(JSON.stringify(
+            {
+              accountBinding: {
+                status: "waitingForAgentObservation",
+                attempts: bindAttempts,
+                accountId: pending.accountId,
+                outputRef: pending.outputRef,
+                monitoring,
+              },
+            },
+            null,
+            2,
+          ));
+        }
+        return undefined;
+      }
       if (force && String(error).includes("alreadyBound")) {
         throw new Error(`forced account bind was rejected as alreadyBound for ${pending.accountId}`);
       }
