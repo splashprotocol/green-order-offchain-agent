@@ -3,6 +3,7 @@ import { assert, assertStringIncludes } from "https://deno.land/std@0.224.0/asse
 const runner = await Deno.readTextFile("run-preprod-e2e.sh");
 const bindAccountScript = await Deno.readTextFile("03-create-aleph-account-and-bind.ts");
 const walletScript = await Deno.readTextFile("00-prepare-preprod-wallets.ts");
+const operatorFundingScript = await Deno.readTextFile("07-prepare-operator-funding.ts");
 
 Deno.test("run-preprod-e2e can launch and stop a local green-order agent", () => {
   assertStringIncludes(runner, "START_GREEN_ORDER_AGENT");
@@ -37,8 +38,28 @@ Deno.test("run-preprod-e2e prepares wallet env before operator funding", () => {
   assert(walletIndex < fundingIndex, "wallet env must be available before operator funding");
 });
 
+Deno.test("run-preprod-e2e asks for Blockfrost before falling back to Koios", () => {
+  const providerIndex = runner.indexOf("prepare_preprod_provider_env");
+  const walletIndex = runner.indexOf("prepare_preprod_wallet_env");
+
+  assertStringIncludes(runner, "has_blockfrost_project_id");
+  assertStringIncludes(runner, "BLOCKFROST_PROJECT_ID");
+  assertStringIncludes(runner, "Enter Blockfrost preprod project id");
+  assertStringIncludes(runner, "using Koios provider");
+  assert(providerIndex >= 0, "runner should prepare provider env");
+  assert(walletIndex >= 0, "runner should prepare wallet env");
+  assert(providerIndex < walletIndex, "provider choice should be available before wallet funding checks");
+});
+
 Deno.test("wallet preparation requests enough batcher tADA for auditor runs", () => {
   assertStringIncludes(walletScript, 'E2E_BATCHER_REQUESTED_ADA")?.trim() || "400"');
+});
+
+Deno.test("operator funding script retries provider UTxO lookups", () => {
+  assertStringIncludes(operatorFundingScript, 'import { withRetries } from "./src/retry.ts";');
+  assertStringIncludes(operatorFundingScript, "getUtxosWithRetries");
+  assertStringIncludes(operatorFundingScript, "OPERATOR_FUNDING_PROVIDER_RETRY_ATTEMPTS");
+  assertStringIncludes(operatorFundingScript, "operator funding observation failed");
 });
 
 Deno.test("run-preprod-e2e keeps agent cleanup trap active in force mode", () => {

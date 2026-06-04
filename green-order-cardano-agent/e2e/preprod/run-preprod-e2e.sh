@@ -39,6 +39,41 @@ env_file_has_value() {
   [[ -f "$path" ]] && grep -Eq "^${name}=.+" "$path"
 }
 
+has_blockfrost_project_id() {
+  if [[ -n "${BLOCKFROST_PROJECT_ID:-}" ]]; then
+    return 0
+  fi
+  if env_file_has_value ".env" "BLOCKFROST_PROJECT_ID"; then
+    return 0
+  fi
+  if env_file_has_value ".env.wallets" "BLOCKFROST_PROJECT_ID"; then
+    return 0
+  fi
+  if [[ -n "${WALLET_ENV_PATH:-}" ]] && env_file_has_value "$WALLET_ENV_PATH" "BLOCKFROST_PROJECT_ID"; then
+    return 0
+  fi
+  return 1
+}
+
+prepare_preprod_provider_env() {
+  if has_blockfrost_project_id; then
+    return 0
+  fi
+
+  if [[ -t 0 && -t 1 ]]; then
+    local blockfrost_project_id
+    printf "Enter Blockfrost preprod project id (press Enter to use Koios): "
+    IFS= read -r blockfrost_project_id
+    if [[ -n "$blockfrost_project_id" ]]; then
+      export BLOCKFROST_PROJECT_ID="$blockfrost_project_id"
+    else
+      echo "BLOCKFROST_PROJECT_ID not set; using Koios provider"
+    fi
+  else
+    echo "BLOCKFROST_PROJECT_ID not set and stdin is not interactive; using Koios provider"
+  fi
+}
+
 has_preprod_wallet_env() {
   if [[ -n "${FUNDED_WALLET_SEED:-}" && -n "${BATCHER_ADDRESS:-}" ]]; then
     return 0
@@ -252,6 +287,7 @@ if [[ "${FORCE_E2E_STATE:-0}" == "1" ]]; then
 fi
 
 prepare_green_order_agent_base_config
+prepare_preprod_provider_env
 prepare_preprod_wallet_env
 deno run --no-lock --allow-net --allow-read --allow-write --allow-env 07-prepare-operator-funding.ts
 start_green_order_agent

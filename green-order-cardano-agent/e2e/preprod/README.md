@@ -6,7 +6,7 @@ full-fill smoke order swaps 1 ADA for at least 900,000 generated test-token unit
 
 Copy `.env.example` to `.env` and fill:
 
-- `BLOCKFROST_PROJECT_ID`
+- `BLOCKFROST_PROJECT_ID`, optional but recommended for preprod provider stability
 - `FUNDED_WALLET_SEED`
 - `CARDANO_NODE_SOCKET_PATH`
 - `OPERATOR_KEY_HASH_HEX`, matching the running agent operator payment key hash
@@ -16,6 +16,10 @@ Copy `.env.example` to `.env` and fill:
 `CARDANO_NODE_SOCKET_PATH` must point to a running Cardano preprod node socket when starting the Rust agent.
 `06-deploy-aleph-reference-scripts.ts` also requires `ALEPH_BLUEPRINT_PATH` if Aleph reference scripts need to
 be deployed.
+
+If `BLOCKFROST_PROJECT_ID` is not set in the environment, `.env`, `.env.wallets`, or `WALLET_ENV_PATH`, the
+`run-preprod-e2e.sh` wrapper asks for a preprod Blockfrost project id at startup. Press Enter to use Koios
+instead. The prompted value is exported only for that process and is not written to committed files.
 
 `AGENT_HMAC_SECRET` and `AGENT_HMAC_KEY_ID` are not required for the local preprod agent. If they are set, the
 E2E harness passes them to the TypeScript SDK and the SDK signs agent HTTP requests with HMAC headers. Do not
