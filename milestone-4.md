@@ -16,14 +16,14 @@ Evidence:
 - HMAC request signing helpers for operator HTTP API protection: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/sdk/typescript/src/hmac.ts
 - Account binding and account-status payload helpers: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/sdk/typescript/src/account.ts
 - Agent HTTP routes for `POST /intents`, `POST /accounts/bind`, `GET /accounts/status`, `GET /accounts/:account_id`, `GET /monitoring/summary`, and `GET /monitoring/readiness`: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/green-order-cardano-agent/src/http_intent_source.rs
-- Public PR creation URL for this branch: https://github.com/splashprotocol/green-order-offchain-agent/pull/new/sdk-api
+- Pull request submitted to the open GitHub repository: https://github.com/splashprotocol/green-order-offchain-agent/pull/1
 
 How the Acceptance Criteria can be verified:
 - Acceptance criterion 1 says the code must be written and submitted to an open GitHub repository. Verify that the public branch opens at https://github.com/splashprotocol/green-order-offchain-agent/tree/sdk-api and that the SDK source files above are visible in `sdk/typescript/src`.
 - Verify the SDK API surface by inspecting `sdk/typescript/src/index.ts`, `client.ts`, `intent.ts`, `account.ts`, and `hmac.ts`.
 - Verify the agent routes consumed by the SDK by inspecting `green-order-cardano-agent/src/http_intent_source.rs`.
-- Verify the branch head used for this report: `5c40947f8c3fae6966f9038530dde3960a6bb0f0`.
-- Note on PR verification: the branch is pushed and publicly observable. Creating the PR through `gh pr create` was attempted locally, but the GitHub CLI token returned `HTTP 401: Bad credentials`. The PR creation URL above returns HTTP 200 and can be used to open the final public PR; after PR creation, replace it with the final PR URL.
+- Verify the current branch and pull request head directly from GitHub PR #1; the evidence links in this report use the public `sdk-api` branch so they resolve to the latest pushed milestone evidence.
+- Verify the submitted pull request at https://github.com/splashprotocol/green-order-offchain-agent/pull/1 is public, uses the `sdk-api` branch, and contains the SDK source, agent API route, test, E2E, and documentation changes referenced in this report.
 
 SDK-based preprod integration evidence:
 - SDK-based preprod E2E runner: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/green-order-cardano-agent/e2e/preprod/run-preprod-e2e.sh
@@ -91,13 +91,13 @@ Expected result from local verification on branch `sdk-api`:
 - Preprod TypeScript/Deno check passed.
 - Preprod E2E support tests passed: `47` passed, `0` failed.
 
-Milestone Output 3 — SDK documentation published on GitHub and GitBook
+Milestone Output 3 — SDK documentation published as Markdown on GitHub
 
-Description: The SDK is documented in Markdown files available in the open GitHub repository. The documentation explains the TypeScript SDK package, installation and test commands, build/sign/submit usage, account monitoring, HMAC request signing, the SDK HTTP API contract, test coverage, and concrete examples. The `docs/sdk` directory is the source material intended for GitBook publication.
+Description: The SDK is documented in Markdown files available in the open GitHub repository. The documentation explains the TypeScript SDK package, installation and test commands, build/sign/submit usage, account monitoring, HMAC request signing, the SDK HTTP API contract, test coverage, and concrete examples. There is no separate GitBook publication for this milestone; the audit evidence is the Markdown documentation in the public repository.
 
 Evidence:
 - SDK README: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/sdk/typescript/README.md
-- SDK documentation directory intended as the GitBook source: https://github.com/splashprotocol/green-order-offchain-agent/tree/sdk-api/docs/sdk
+- SDK documentation directory: https://github.com/splashprotocol/green-order-offchain-agent/tree/sdk-api/docs/sdk
 - TypeScript SDK API documentation: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/sdk/typescript.md
 - Agent API contract used by the SDK: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/sdk/api-contract.md
 - SDK test coverage documentation: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/sdk/test-coverage.md
@@ -108,6 +108,7 @@ Evidence:
 
 How the Acceptance Criteria can be verified:
 - Acceptance criterion 3 says the codebase must be documented and accessible as Markdown files through the open GitHub repository. Verify each documentation link above opens from the public `sdk-api` branch.
+- Note: no separate GitBook URL is provided because the SDK documentation is currently published in the GitHub repository as Markdown.
 - Verify that `docs/sdk/typescript.md` documents the SDK APIs and signer model.
 - Verify that `docs/sdk/api-contract.md` documents the agent HTTP routes wrapped by the SDK.
 - Verify that `docs/sdk/examples/full-fill-intent.md` and `docs/sdk/examples/monitor-account.md` provide practical usage examples.
