@@ -22,7 +22,7 @@ How the Acceptance Criteria can be verified:
 - Acceptance criterion 1 says the code must be written and submitted to an open GitHub repository. Verify that the public branch opens at https://github.com/splashprotocol/green-order-offchain-agent/tree/sdk-api and that the SDK source files above are visible in `sdk/typescript/src`.
 - Verify the SDK API surface by inspecting `sdk/typescript/src/index.ts`, `client.ts`, `intent.ts`, `account.ts`, and `hmac.ts`.
 - Verify the agent routes consumed by the SDK by inspecting `green-order-cardano-agent/src/http_intent_source.rs`.
-- Verify the branch head used for this report: `2b57e051f0f44e1380203d829aa7b1624b6f4cef`.
+- Verify the branch head used for this report: `5c40947f8c3fae6966f9038530dde3960a6bb0f0`.
 - Note on PR verification: the branch is pushed and publicly observable. Creating the PR through `gh pr create` was attempted locally, but the GitHub CLI token returned `HTTP 401: Bad credentials`. The PR creation URL above returns HTTP 200 and can be used to open the final public PR; after PR creation, replace it with the final PR URL.
 
 SDK-based preprod integration evidence:
