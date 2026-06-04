@@ -360,4 +360,7 @@ deno run --no-lock --allow-net --allow-read --allow-write --allow-env --allow-ru
 if [[ "${E2E_QUERY_SDK_AFTER_SMOKE:-1}" == "1" ]]; then
   sdk_query_script="${E2E_SDK_QUERY_SCRIPT:-11-query-agent-via-sdk.ts}"
   deno run --no-lock --allow-net --allow-read --allow-write --allow-env "${sdk_query_script}"
+  if [[ "${E2E_CHECK_BAD_HMAC:-1}" == "1" ]]; then
+    deno run --no-lock --allow-net --allow-read --allow-env 12-query-agent-with-bad-hmac.ts
+  fi
 fi

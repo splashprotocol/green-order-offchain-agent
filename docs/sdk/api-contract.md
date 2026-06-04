@@ -166,4 +166,4 @@ BODY_SHA256_HEX
 ```
 
 The agent rejects missing headers, stale timestamps, mismatched body hashes, and
-invalid signatures with `401`.
+invalid signatures with `403 Forbidden`.

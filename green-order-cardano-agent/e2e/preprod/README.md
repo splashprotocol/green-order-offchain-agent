@@ -25,6 +25,8 @@ instead. The prompted value is exported only for that process and is not written
 E2E harness writes them into the run-local agent config as `greenOrdersHmacAuth` and passes them to the
 TypeScript SDK, so the agent verifies HMAC and the SDK signs every agent HTTP request. Do not hardcode these
 values in scripts or committed config.
+The runner also submits one SDK monitoring request with an intentionally wrong HMAC secret and expects
+`403 Forbidden`; successful runs print `bad_hmac_check=passed`.
 
 To create local preprod wallets for the agent/batcher and reference-script deployment:
 

@@ -161,7 +161,7 @@ fn header_str<'a>(headers: &'a axum::http::HeaderMap, name: &str) -> Result<&'a 
 
 fn hmac_rejected(reason: &'static str) -> Response {
     (
-        StatusCode::UNAUTHORIZED,
+        StatusCode::FORBIDDEN,
         Json(serde_json::json!({"status": "rejected", "reason": reason})),
     )
         .into_response()
@@ -1000,7 +1000,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
@@ -1042,7 +1042,7 @@ mod tests {
         }
         let response = app.oneshot(builder.body(Body::empty()).unwrap()).await.unwrap();
 
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
@@ -1064,7 +1064,7 @@ mod tests {
         }
         let response = app.oneshot(builder.body(Body::empty()).unwrap()).await.unwrap();
 
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

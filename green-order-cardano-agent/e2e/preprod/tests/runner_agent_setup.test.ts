@@ -105,10 +105,13 @@ Deno.test("run-preprod-e2e cleans forced agent chain-sync state before launch", 
 Deno.test("run-preprod-e2e queries SDK monitoring after smoke execution", () => {
   const smokeIndex = runner.indexOf('"${smoke_script}"');
   const queryIndex = runner.indexOf("11-query-agent-via-sdk.ts");
+  const badHmacIndex = runner.indexOf("12-query-agent-with-bad-hmac.ts");
 
   assert(smokeIndex >= 0, "runner should execute the smoke script");
   assert(queryIndex >= 0, "runner should query SDK monitoring");
+  assert(badHmacIndex >= 0, "runner should verify bad HMAC rejection");
   assert(smokeIndex < queryIndex, "SDK monitoring query must run after smoke execution");
+  assert(queryIndex < badHmacIndex, "bad HMAC check must run after a valid SDK query");
 });
 
 Deno.test("account binding script logs agent observation progress", () => {
