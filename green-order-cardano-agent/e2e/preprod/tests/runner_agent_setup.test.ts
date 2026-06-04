@@ -30,6 +30,21 @@ Deno.test("run-preprod-e2e passes an absolute generated config path to the agent
   assertStringIncludes(runner, '--config-path "$AGENT_RUN_CONFIG_PATH"');
 });
 
+Deno.test("run-preprod-e2e cleans forced agent chain-sync state before launch", () => {
+  const configIndex = runner.indexOf("prepare_green_order_agent_config");
+  const cleanIndex = runner.indexOf("clean_forced_green_order_agent_state");
+  const buildIndex = runner.indexOf("agent: building binary");
+
+  assertStringIncludes(runner, "FORCE_E2E_STATE");
+  assertStringIncludes(runner, 'rm -rf "$db_path" "$db_path.green-account-stores.json"');
+  assertStringIncludes(runner, "ALLOW_FORCE_CLEAN_EXTERNAL_AGENT_DB");
+  assert(configIndex >= 0, "runner should prepare generated agent config");
+  assert(cleanIndex >= 0, "runner should clean generated agent state");
+  assert(buildIndex >= 0, "runner should build the agent");
+  assert(configIndex < cleanIndex, "cleanup should read the generated config path");
+  assert(cleanIndex < buildIndex, "cleanup should happen before the agent starts");
+});
+
 Deno.test("run-preprod-e2e queries SDK monitoring after smoke execution", () => {
   const smokeIndex = runner.indexOf('"${smoke_script}"');
   const queryIndex = runner.indexOf("11-query-agent-via-sdk.ts");

@@ -147,6 +147,32 @@ prepare_green_order_agent_config() {
     09-create-partial-agent-config.ts --out "$AGENT_RUN_CONFIG_PATH"
 }
 
+clean_forced_green_order_agent_state() {
+  if [[ "${FORCE_E2E_STATE:-0}" != "1" ]]; then
+    return 0
+  fi
+
+  local db_path
+  db_path="$(deno eval --no-lock \
+    'const config = JSON.parse(await Deno.readTextFile(Deno.args[0])); console.log(config.chainSync?.dbPath ?? "");' \
+    "$AGENT_RUN_CONFIG_PATH")"
+  if [[ -z "$db_path" || "$db_path" == "/" ]]; then
+    echo "refusing to clean empty or root agent chain-sync db path: '$db_path'" >&2
+    return 1
+  fi
+
+  local state_root
+  state_root="$(absolute_e2e_path ".state")"
+  if [[ "$db_path" != "$state_root"/* && "${ALLOW_FORCE_CLEAN_EXTERNAL_AGENT_DB:-0}" != "1" ]]; then
+    echo "refusing to clean agent chain-sync db outside $state_root: $db_path" >&2
+    echo "Set ALLOW_FORCE_CLEAN_EXTERNAL_AGENT_DB=1 only for an explicit disposable path." >&2
+    return 1
+  fi
+
+  echo "agent: cleaning forced chain-sync state $db_path"
+  rm -rf "$db_path" "$db_path.green-account-stores.json"
+}
+
 start_green_order_agent() {
   if [[ "$START_GREEN_ORDER_AGENT" != "1" ]]; then
     echo "agent: using externally managed endpoint ${AGENT_URL:-http://127.0.0.1:9031}"
@@ -156,6 +182,7 @@ start_green_order_agent() {
   init_agent_endpoints
   require_agent_endpoint_free
   prepare_green_order_agent_config
+  clean_forced_green_order_agent_state
 
   echo "agent: building binary"
   (cd "$REPO_ROOT" && cargo build -q -p green-order-cardano-agent --bin green-order-cardano-agent)
