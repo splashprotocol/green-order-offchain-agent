@@ -2,6 +2,7 @@ import { assert, assertStringIncludes } from "https://deno.land/std@0.224.0/asse
 
 const runner = await Deno.readTextFile("run-preprod-e2e.sh");
 const bindAccountScript = await Deno.readTextFile("03-create-aleph-account-and-bind.ts");
+const walletScript = await Deno.readTextFile("00-prepare-preprod-wallets.ts");
 
 Deno.test("run-preprod-e2e can launch and stop a local green-order agent", () => {
   assertStringIncludes(runner, "START_GREEN_ORDER_AGENT");
@@ -18,6 +19,23 @@ Deno.test("run-preprod-e2e builds SDK before account binding can load it", () =>
   assert(buildIndex >= 0, "runner should build the SDK");
   assert(bindIndex >= 0, "runner should run account binding");
   assert(buildIndex < bindIndex, "SDK build must happen before account binding");
+});
+
+Deno.test("run-preprod-e2e prepares wallet env before operator funding", () => {
+  const walletIndex = runner.indexOf("prepare_preprod_wallet_env");
+  const fundingIndex = runner.indexOf("07-prepare-operator-funding.ts");
+
+  assertStringIncludes(runner, "00-prepare-preprod-wallets.ts");
+  assertStringIncludes(runner, "FUNDED_WALLET_SEED");
+  assertStringIncludes(runner, "BATCHER_ADDRESS");
+  assertStringIncludes(runner, "Send at least ${E2E_BATCHER_REQUESTED_ADA:-400} tADA");
+  assert(walletIndex >= 0, "runner should prepare wallet env");
+  assert(fundingIndex >= 0, "runner should prepare operator funding");
+  assert(walletIndex < fundingIndex, "wallet env must be available before operator funding");
+});
+
+Deno.test("wallet preparation requests enough batcher tADA for auditor runs", () => {
+  assertStringIncludes(walletScript, 'E2E_BATCHER_REQUESTED_ADA")?.trim() || "400"');
 });
 
 Deno.test("run-preprod-e2e keeps agent cleanup trap active in force mode", () => {

@@ -33,6 +33,44 @@ absolute_e2e_path() {
   fi
 }
 
+env_file_has_value() {
+  local path="$1"
+  local name="$2"
+  [[ -f "$path" ]] && grep -Eq "^${name}=.+" "$path"
+}
+
+has_preprod_wallet_env() {
+  if [[ -n "${FUNDED_WALLET_SEED:-}" && -n "${BATCHER_ADDRESS:-}" ]]; then
+    return 0
+  fi
+  if env_file_has_value ".env.wallets" "FUNDED_WALLET_SEED" && env_file_has_value ".env.wallets" "BATCHER_ADDRESS"; then
+    return 0
+  fi
+  if env_file_has_value ".env" "FUNDED_WALLET_SEED" && env_file_has_value ".env" "BATCHER_ADDRESS"; then
+    return 0
+  fi
+  if [[ -n "${WALLET_ENV_PATH:-}" ]] &&
+    env_file_has_value "$WALLET_ENV_PATH" "FUNDED_WALLET_SEED" &&
+    env_file_has_value "$WALLET_ENV_PATH" "BATCHER_ADDRESS"; then
+    return 0
+  fi
+  return 1
+}
+
+prepare_preprod_wallet_env() {
+  if has_preprod_wallet_env; then
+    return 0
+  fi
+
+  echo "wallet env missing; generating local preprod wallet secrets"
+  deno run --no-lock --allow-read --allow-write --allow-env 00-prepare-preprod-wallets.ts
+  local batcher_address
+  batcher_address="$(sed -n 's/^BATCHER_ADDRESS=//p' "${WALLET_ENV_PATH:-.env.wallets}" | head -n 1)"
+  echo "Send at least ${E2E_BATCHER_REQUESTED_ADA:-400} tADA to this batcher address, then rerun:"
+  echo "$batcher_address"
+  exit 2
+}
+
 init_agent_endpoints() {
   if [[ -z "${AGENT_HEALTH_URL:-}" && -z "${AGENT_HEALTH_LISTEN_ADDR:-}" ]]; then
     local health_port
@@ -214,6 +252,7 @@ if [[ "${FORCE_E2E_STATE:-0}" == "1" ]]; then
 fi
 
 prepare_green_order_agent_base_config
+prepare_preprod_wallet_env
 deno run --no-lock --allow-net --allow-read --allow-write --allow-env 07-prepare-operator-funding.ts
 start_green_order_agent
 
