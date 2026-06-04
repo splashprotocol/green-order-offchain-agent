@@ -26,9 +26,12 @@ Deno.test("run-preprod-e2e prepares wallet env before operator funding", () => {
   const fundingIndex = runner.indexOf("07-prepare-operator-funding.ts");
 
   assertStringIncludes(runner, "00-prepare-preprod-wallets.ts");
+  assertStringIncludes(runner, "00-wait-for-preprod-wallet-funding.ts");
   assertStringIncludes(runner, "FUNDED_WALLET_SEED");
   assertStringIncludes(runner, "BATCHER_ADDRESS");
-  assertStringIncludes(runner, "Send at least ${E2E_BATCHER_REQUESTED_ADA:-400} tADA");
+  assertStringIncludes(runner, "Send at least ${E2E_BATCHER_REQUESTED_ADA:-400} tADA to:");
+  assert(!runner.includes("then rerun"), "fresh wallet path should wait instead of asking for a rerun");
+  assert(!runner.includes("exit 2"), "fresh wallet path should continue after funding is observed");
   assert(walletIndex >= 0, "runner should prepare wallet env");
   assert(fundingIndex >= 0, "runner should prepare operator funding");
   assert(walletIndex < fundingIndex, "wallet env must be available before operator funding");

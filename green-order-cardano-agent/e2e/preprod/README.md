@@ -33,8 +33,8 @@ UTxOs, pool/account creation, and smoke transactions.
 
 The `run-preprod-e2e.sh` wrapper also runs wallet preparation automatically if `FUNDED_WALLET_SEED` and
 `BATCHER_ADDRESS` are not present in the environment, `.env`, `.env.wallets`, or `WALLET_ENV_PATH`. On a fresh
-auditor machine it will print the generated batcher address and stop. Send test ADA to that address, then
-rerun the same command.
+auditor machine it prints the generated batcher address and waits until funding is observed, then continues
+the same run.
 
 Prepare operator collateral/funding first. For the Catalyst demo wrapper, this script writes to a run-local
 copy of the agent config. If you run it directly, set `AGENT_CONFIG_PATH` to an explicit writable config path
