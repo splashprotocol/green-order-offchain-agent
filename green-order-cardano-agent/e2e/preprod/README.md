@@ -40,6 +40,10 @@ The `run-preprod-e2e.sh` wrapper also runs wallet preparation automatically if `
 auditor machine it prints the generated batcher address and waits until funding is observed, then continues
 the same run.
 
+With `FORCE_E2E_STATE=1`, the wrapper generates a fresh run-local wallet env at `.state/preprod-wallets.env`
+and ignores any previous `.env.wallets` batcher for the run. Set `E2E_REUSE_WALLET_ENV=1` only when you
+explicitly want a forced run to reuse an existing funded wallet env.
+
 Prepare operator collateral/funding first. For the Catalyst demo wrapper, this script writes to a run-local
 copy of the agent config. If you run it directly, set `AGENT_CONFIG_PATH` to an explicit writable config path
 instead of mutating the committed template.

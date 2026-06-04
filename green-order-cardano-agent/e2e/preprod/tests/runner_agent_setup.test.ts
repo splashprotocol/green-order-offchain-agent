@@ -44,6 +44,14 @@ Deno.test("run-preprod-e2e checks batcher funding even when wallet env already e
   assertStringIncludes(runner, "00-wait-for-preprod-wallet-funding.ts");
 });
 
+Deno.test("run-preprod-e2e force mode uses run-local generated wallets", () => {
+  assertStringIncludes(runner, "prepare_forced_wallet_state");
+  assertStringIncludes(runner, 'WALLET_ENV_PATH="${WALLET_ENV_PATH:-.state/preprod-wallets.env}"');
+  assertStringIncludes(runner, 'WALLET_STATE_PATH="${WALLET_STATE_PATH:-.state/preprod-wallets.json}"');
+  assertStringIncludes(runner, 'FORCE_NEW_WALLETS="${FORCE_NEW_WALLETS:-1}"');
+  assertStringIncludes(runner, "forced e2e state; generating fresh batcher wallet env");
+});
+
 Deno.test("run-preprod-e2e asks for Blockfrost before falling back to Koios", () => {
   const providerIndex = runner.indexOf("prepare_preprod_provider_env");
   const walletIndex = runner.indexOf("prepare_preprod_wallet_env");

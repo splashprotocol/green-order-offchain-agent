@@ -92,7 +92,29 @@ has_preprod_wallet_env() {
   return 1
 }
 
+prepare_forced_wallet_state() {
+  if [[ "${FORCE_E2E_STATE:-0}" != "1" || "${E2E_REUSE_WALLET_ENV:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  mkdir -p .state
+  export WALLET_ENV_PATH="${WALLET_ENV_PATH:-.state/preprod-wallets.env}"
+  export WALLET_STATE_PATH="${WALLET_STATE_PATH:-.state/preprod-wallets.json}"
+  export FORCE_NEW_WALLETS="${FORCE_NEW_WALLETS:-1}"
+}
+
 prepare_preprod_wallet_env() {
+  if [[ "${FORCE_E2E_STATE:-0}" == "1" && "${E2E_REUSE_WALLET_ENV:-0}" != "1" ]]; then
+    echo "forced e2e state; generating fresh batcher wallet env"
+    deno run --no-lock --allow-read --allow-write --allow-env 00-prepare-preprod-wallets.ts
+    local batcher_address
+    batcher_address="$(sed -n 's/^BATCHER_ADDRESS=//p' "${WALLET_ENV_PATH:-.env.wallets}" | head -n 1)"
+    echo "Send at least ${E2E_BATCHER_REQUESTED_ADA:-400} tADA to:"
+    echo "$batcher_address"
+    deno run --no-lock --allow-net --allow-read --allow-env 00-wait-for-preprod-wallet-funding.ts
+    return 0
+  fi
+
   if has_preprod_wallet_env; then
     echo "batcher wallet env available; checking funding"
   else
@@ -288,6 +310,7 @@ fi
 
 prepare_green_order_agent_base_config
 prepare_preprod_provider_env
+prepare_forced_wallet_state
 prepare_preprod_wallet_env
 deno run --no-lock --allow-net --allow-read --allow-write --allow-env 07-prepare-operator-funding.ts
 start_green_order_agent
