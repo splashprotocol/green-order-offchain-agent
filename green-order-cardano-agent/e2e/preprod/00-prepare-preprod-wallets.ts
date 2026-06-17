@@ -19,7 +19,7 @@ const envPath = Deno.env.get("WALLET_ENV_PATH")?.trim() || ".env.wallets";
 const forceNewWallets = Deno.env.get("FORCE_NEW_WALLETS")?.trim() === "1";
 
 const requestedAda = {
-  batcher: 50,
+  batcher: Number(Deno.env.get("E2E_BATCHER_REQUESTED_ADA")?.trim() || "400"),
   deployment: 20,
 } as const;
 

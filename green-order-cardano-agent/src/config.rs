@@ -19,6 +19,7 @@ use spectrum_offchain::data::small_vec::SmallVec;
 use spectrum_offchain_cardano::data::dao_request::DAOContext;
 use spectrum_offchain_cardano::data::royalty_withdraw_request::RoyaltyWithdrawContext;
 
+use crate::http_intent_source::HmacAuthConfig;
 use crate::intent_source::GreenOrdersConfig;
 
 #[derive(serde::Deserialize)]
@@ -46,6 +47,8 @@ pub struct AppConfig {
     pub health_listen_addr: Option<SocketAddr>,
     #[serde(default)]
     pub green_orders: GreenOrdersConfig,
+    #[serde(default)]
+    pub green_orders_hmac_auth: Option<HmacAuthConfig>,
     #[serde(default = "default_min_operator_funding_lovelace")]
     pub min_operator_funding_lovelace: u64,
 }

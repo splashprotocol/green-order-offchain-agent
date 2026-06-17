@@ -2,6 +2,7 @@ import { CML, Lucid } from "npm:@lucid-evolution/lucid@0.3.53";
 import { submitSignedTx } from "./src/lucid.ts";
 import { assertWritableAgentConfig, resolveAgentConfigPath } from "./src/operator_config.ts";
 import { loadPreprodEnv, lovelaceToAda, preprodProvider } from "./src/provider.ts";
+import { withRetries } from "./src/retry.ts";
 
 type OperatorState = {
   operatorKey: string;
@@ -117,11 +118,15 @@ async function writeAgentConfig(operatorKey: string): Promise<void> {
 }
 
 async function hasUsableOperatorFunding(operator: OperatorState): Promise<boolean> {
-  const collateral = await provider.getUtxos(operator.collateralAddress);
+  const collateral = await getUtxosWithRetries(operator.collateralAddress, "operator collateral lookup");
   const hasCollateral = collateral.some((utxo) =>
     !Object.keys(utxo.assets).some((unit) => unit !== "lovelace") && utxo.assets.lovelace === 10_000_000n
   );
-  const funded = await Promise.all(operator.fundingAddresses.map((address) => provider.getUtxos(address)));
+  const funded = await Promise.all(
+    operator.fundingAddresses.map((address, index) =>
+      getUtxosWithRetries(address, `operator funding lookup ${index + 1}`)
+    ),
+  );
   const hasFunding = funded.every((utxos) =>
     utxos.some((utxo) =>
       !Object.keys(utxo.assets).some((unit) => unit !== "lovelace") &&
@@ -132,11 +137,27 @@ async function hasUsableOperatorFunding(operator: OperatorState): Promise<boolea
 }
 
 async function waitForOperatorFunding(operator: OperatorState): Promise<void> {
+  let lastError: unknown;
   for (let attempt = 0; attempt < 60; attempt++) {
-    if (await hasUsableOperatorFunding(operator)) return;
+    try {
+      if (await hasUsableOperatorFunding(operator)) return;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `operator funding observation failed (${attempt + 1}/60): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
     await new Promise((resolve) => setTimeout(resolve, 5_000));
   }
-  throw new Error("operator funding was not observed on preprod");
+  throw new Error(
+    `operator funding was not observed on preprod${
+      lastError
+        ? `; last provider error: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+        : ""
+    }`,
+  );
 }
 
 async function printBalances(operator: OperatorState): Promise<void> {
@@ -146,10 +167,18 @@ async function printBalances(operator: OperatorState): Promise<void> {
       ...operator.fundingAddresses.map((address, index) => [`funding${index + 1}`, address] as const),
     ] as const
   ) {
-    const utxos = await provider.getUtxos(address);
+    const utxos = await getUtxosWithRetries(address, `${label} balance lookup`);
     const lovelace = utxos.reduce((sum, utxo) => sum + (utxo.assets.lovelace ?? 0n), 0n);
     console.log(`${label}: ${lovelaceToAda(lovelace)} tADA ${address}`);
   }
+}
+
+async function getUtxosWithRetries(address: string, description: string) {
+  return await withRetries(() => provider.getUtxos(address), {
+    description,
+    attempts: Number(Deno.env.get("OPERATOR_FUNDING_PROVIDER_RETRY_ATTEMPTS")?.trim() || "3"),
+    delayMs: Number(Deno.env.get("OPERATOR_FUNDING_PROVIDER_RETRY_DELAY_MS")?.trim() || "3000"),
+  });
 }
 
 function requiredEnv(name: string): string {

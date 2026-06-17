@@ -3,7 +3,11 @@ import { createPartialAgentConfig, recentChainSyncPoint } from "../src/partial_a
 
 Deno.test("createPartialAgentConfig enables partial and writes absolute db path", async () => {
   const previousSocketPath = Deno.env.get("CARDANO_NODE_SOCKET_PATH");
+  const previousHmacSecret = Deno.env.get("AGENT_HMAC_SECRET");
+  const previousHmacKeyId = Deno.env.get("AGENT_HMAC_KEY_ID");
   Deno.env.set("CARDANO_NODE_SOCKET_PATH", "/tmp/preprod-node.socket");
+  Deno.env.set("AGENT_HMAC_SECRET", "test-secret");
+  Deno.env.set("AGENT_HMAC_KEY_ID", "preprod");
   const original = {
     chainSync: {
       dbPath: "green-order-cardano-agent/e2e/preprod/.state/agent-chain-sync-funding",
@@ -31,9 +35,17 @@ Deno.test("createPartialAgentConfig enables partial and writes absolute db path"
     assertEquals(out.config.chainSync.disableRollbacksUntil, 123);
     assertEquals(out.config.operatorKey, "operator");
     assertEquals(out.config.node.path, "/tmp/preprod-node.socket");
+    assertEquals(out.config.greenOrdersHmacAuth, {
+      secret: "test-secret",
+      keyId: "preprod",
+    });
   } finally {
     if (previousSocketPath === undefined) Deno.env.delete("CARDANO_NODE_SOCKET_PATH");
     else Deno.env.set("CARDANO_NODE_SOCKET_PATH", previousSocketPath);
+    if (previousHmacSecret === undefined) Deno.env.delete("AGENT_HMAC_SECRET");
+    else Deno.env.set("AGENT_HMAC_SECRET", previousHmacSecret);
+    if (previousHmacKeyId === undefined) Deno.env.delete("AGENT_HMAC_KEY_ID");
+    else Deno.env.set("AGENT_HMAC_KEY_ID", previousHmacKeyId);
   }
 });
 

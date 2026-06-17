@@ -1,6 +1,9 @@
 {
   "lock": false,
   "nodeModulesDir": true,
+  "imports": {
+    "@noble/hashes/blake2b": "npm:@noble/hashes@1.7.1/blake2b"
+  },
   "fmt": {
     "lineWidth": 110,
     "indentWidth": 2,
@@ -8,7 +11,7 @@
     "singleQuote": false
   },
   "tasks": {
-    "check": "deno check --no-lock 00-prepare-preprod-wallets.ts 01-create-royalty-v1-pool.ts 02-create-entitlements.ts 03-create-aleph-account-and-bind.ts 04-submit-green-order-smoke.ts 05-check-preprod-wallets.ts 06-deploy-aleph-reference-scripts.ts 07-prepare-operator-funding.ts 08-create-separator-funding.ts 09-create-partial-agent-config.ts 09-deploy-royalty-v1-reference-script.ts 10-preflight-green-order-partial-smoke.ts 10-submit-green-order-partial-smoke.ts",
+    "check": "deno check --no-lock 00-prepare-preprod-wallets.ts 00-wait-for-preprod-wallet-funding.ts 01-create-royalty-v1-pool.ts 02-create-entitlements.ts 03-create-aleph-account-and-bind.ts 04-submit-green-order-smoke.ts 05-check-preprod-wallets.ts 06-deploy-aleph-reference-scripts.ts 07-prepare-operator-funding.ts 08-create-separator-funding.ts 09-create-partial-agent-config.ts 09-deploy-royalty-v1-reference-script.ts 10-preflight-green-order-partial-smoke.ts 10-submit-green-order-partial-smoke.ts 11-query-agent-via-sdk.ts 12-query-agent-with-bad-hmac.ts",
     "build:partial-preflight": "cargo build -q -p green-order-cardano-agent --bin partial_preflight",
     "test": "deno test --no-lock --allow-run --allow-read --allow-write --allow-env tests"
   }

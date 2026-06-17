@@ -1,5 +1,13 @@
 # Green Order Offchain Agent
 
+## Milestone 5 close-out documentation
+
+- Project completion report: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/CLOSEOUT_REPORT.md
+- Architecture: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/ARCHITECTURE.md
+- Testing and verification: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/TESTING.md
+- Close-out video demo script: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/DEMO.md
+
+
 This repository is forked from `spectrum-offchain-multiplatform` to build a focused
 Cardano offchain agent for Aleph green orders executed against Royalty V1 pools.
 
@@ -13,13 +21,13 @@ The agent observes Royalty V1 pools and Aleph account UTxOs from ledger/mempool
 events. External signed intents enter through a local HTTP endpoint configured
 under `greenOrders.intentSource.httpListenAddr`.
 
-Current execution mode is intentionally full-fill only:
+The committed default agent config is intentionally full-fill only:
 
 - `execution.o2oAllowed` is `false`.
 - `greenOrders.allowPartial` is `false`.
 - Accepted intents must spend ADA from the Aleph account and execute only
   against a Royalty V1 pool.
-- Path-auth partial continuations are rejected at admission.
+- Path-auth partial continuations are rejected at admission in the default config. The Catalyst demo and partial E2E flow generate a run-local partial-enabled config for the partial-fill proof; they do not require committing partial-fill as the default runtime mode.
 
 Example config:
 

@@ -1,10 +1,10 @@
 import { credentialToAddress } from "npm:@lucid-evolution/utils@0.1.65";
-import { parseAgentAcceptedResponse, submitIntent } from "./src/agent.ts";
 import { deriveCompressedPublicKey, signIntentDigest } from "./src/aleph.ts";
 import { parseAccountDatum } from "./src/account_datum.ts";
 import { loadConfig } from "./src/config.ts";
 import { adaAsset, alephIntentionDigest, buildIntentPayload, nativeAsset } from "./src/intent.ts";
 import { koiosUtxoByRef, koiosUtxosAt, SimpleUtxo } from "./src/koios.ts";
+import { loadGreenOrderSdkClient, parseSdkAcceptedResponse, submitIntentViaSdk } from "./src/sdk_agent.ts";
 import { loadState, saveState } from "./src/state.ts";
 import { waitFor } from "./src/wait.ts";
 
@@ -69,8 +69,13 @@ if (!oldAccount.datum) {
 const oldPool = await koiosUtxoByRef(state.pool.outputRef);
 if (!oldPool) throw new Error("current pool output is not available on preprod");
 
-const response = await submitIntent(config.agentUrl, payload);
-parseAgentAcceptedResponse(response);
+const sdkClient = await loadGreenOrderSdkClient(config.agentUrl, {
+  secret: config.agentHmacSecret,
+  keyId: config.agentHmacKeyId,
+});
+const response = await submitIntentViaSdk(sdkClient, payload);
+parseSdkAcceptedResponse(response);
+console.log("intent_acceptance_response=" + JSON.stringify(response));
 
 await waitFor("old Aleph account output to be spent", async () => {
   const utxo = await koiosUtxoByRef(state.account!.outputRef);
@@ -115,7 +120,24 @@ await saveState(config.statePath, {
   },
   smoke: { submittedIntentDigest: digestHex, executionTxHash: newAccount.txHash },
 });
-console.log("Submitted green order smoke intent");
+console.log(JSON.stringify(
+  {
+    smokeExecution: {
+      submittedIntentDigest: digestHex,
+      acceptedResponse: response,
+      accountId: state.account.accountId,
+      oldAccountOutputRef: state.account.outputRef,
+      oldPoolOutputRef: state.pool.outputRef,
+      executionTxHash: newAccount.txHash,
+      newAccountOutputRef: { txHash: newAccount.txHash, outputIndex: newAccount.outputIndex },
+      newPoolOutputRef: { txHash: newPool.txHash, outputIndex: newPool.outputIndex },
+      outputAsset: state.pool.assetY,
+    },
+  },
+  null,
+  2,
+));
+console.log(`Submitted green order smoke intent in execution tx ${newAccount.txHash}`);
 
 function assertAccountAdvanced(
   oldAccount: { assets: Record<string, bigint> },

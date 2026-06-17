@@ -1,0 +1,18 @@
+{
+  "name": "small-branch-inclusion",
+  "source": "generated with upstream @aiken-lang/merkle-patricia-forestry off-chain Trie.prove/Proof.verify",
+  "operation": "has",
+  "root": "69509862d51b65b26be6e56d3286d2ff00a0e8091d004721f4d2ce6918325c18",
+  "key": "666f6f",
+  "value": "3134",
+  "proof": [
+    {
+      "type": "leaf",
+      "skip": 0,
+      "neighbor": {
+        "key": "844181b39a1b15b417243e6231381b447a3f8b44aa15fbeb845c5d716696e71d",
+        "value": "2f0039e93a27221fcf657fb877a1d4f60307106113e885096cb44a461cd0afbf"
+      }
+    }
+  ]
+}

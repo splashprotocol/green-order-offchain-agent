@@ -3,6 +3,8 @@ import { loadConfig } from "../src/config.ts";
 
 const ENV_KEYS = [
   "AGENT_CONFIG_PATH",
+  "AGENT_HMAC_KEY_ID",
+  "AGENT_HMAC_SECRET",
   "FUNDED_WALLET_SEED",
   "WALLET_ENV_PATH",
   "PARTIAL_LEAVING_LOVELACE",
@@ -19,6 +21,7 @@ Deno.test("loadConfig reads partial smoke env overrides", async () => {
   const agentConfigPath = await writeTempAgentConfig();
   try {
     Deno.env.set("AGENT_CONFIG_PATH", agentConfigPath);
+    Deno.env.set("FUNDED_WALLET_SEED", "test funded seed phrase");
     Deno.env.set("PARTIAL_LEAVING_LOVELACE", "20000000");
     Deno.env.set("PARTIAL_EXPECTED_TOKEN_AMOUNT", "14900000");
     Deno.env.set("PARTIAL_FEE_LOVELACE", "2000000");
@@ -57,11 +60,31 @@ Deno.test("loadConfig reads generated wallet env from WALLET_ENV_PATH", async ()
   }
 });
 
+Deno.test("loadConfig reads optional agent HMAC settings", async () => {
+  const previous = snapshotEnv(ENV_KEYS);
+  const agentConfigPath = await writeTempAgentConfig();
+  try {
+    Deno.env.set("AGENT_CONFIG_PATH", agentConfigPath);
+    Deno.env.set("FUNDED_WALLET_SEED", "test funded seed phrase");
+    Deno.env.set("AGENT_HMAC_SECRET", "test-secret");
+    Deno.env.set("AGENT_HMAC_KEY_ID", "preprod");
+
+    const config = await loadConfig();
+
+    assertEquals(config.agentHmacSecret, "test-secret");
+    assertEquals(config.agentHmacKeyId, "preprod");
+  } finally {
+    await Deno.remove(agentConfigPath).catch(() => {});
+    restoreEnv(previous);
+  }
+});
+
 Deno.test("loadConfig rejects invalid partial execution timeout", async () => {
   const previous = snapshotEnv(ENV_KEYS);
   const agentConfigPath = await writeTempAgentConfig();
   try {
     Deno.env.set("AGENT_CONFIG_PATH", agentConfigPath);
+    Deno.env.set("FUNDED_WALLET_SEED", "test funded seed phrase");
     Deno.env.set("PARTIAL_EXECUTION_TIMEOUT_MS", "bad");
     await assertRejects(() => loadConfig(), Error, "PARTIAL_EXECUTION_TIMEOUT_MS");
   } finally {

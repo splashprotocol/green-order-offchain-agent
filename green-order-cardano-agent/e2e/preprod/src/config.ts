@@ -21,6 +21,8 @@ export type PreprodE2eConfig = {
   fundedWalletSeed: string;
   agentUrl: string;
   agentHealthUrl: string;
+  agentHmacSecret?: string;
+  agentHmacKeyId?: string;
   deploymentPath: string;
   agentConfigPath: string;
   statePath: string;
@@ -66,6 +68,8 @@ export async function loadConfig(): Promise<PreprodE2eConfig> {
     fundedWalletSeed: requiredEnv("FUNDED_WALLET_SEED"),
     agentUrl: env("AGENT_URL", "http://127.0.0.1:9031"),
     agentHealthUrl: env("AGENT_HEALTH_URL", "http://127.0.0.1:9024/health"),
+    agentHmacSecret: optionalEnv("AGENT_HMAC_SECRET"),
+    agentHmacKeyId: optionalEnv("AGENT_HMAC_KEY_ID"),
     deploymentPath,
     agentConfigPath,
     statePath: env("STATE_PATH", ".state/preprod-green-order-e2e.json"),
