@@ -58,6 +58,7 @@ Evidence:
 - Architecture documentation: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/ARCHITECTURE.md
 - Testing and verification documentation: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/TESTING.md
 - Close-out video demo script: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/DEMO.md
+- Russian close-out video recording guide: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/VIDEO_GUIDE_RU.md
 - Project completion report: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/CLOSEOUT_REPORT.md
 - Repository README: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/README.md
 - Catalyst demo README: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/demo/README.md
@@ -93,6 +94,7 @@ Description: The close-out package includes a Markdown recording script for the 
 
 Evidence:
 - Close-out video demo script: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/DEMO.md
+- Russian close-out video recording guide: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/VIDEO_GUIDE_RU.md
 - Repository README close-out entry point: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/README.md
 - Catalyst demo wrapper: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/demo/catalyst-demo.sh
 - Catalyst demo README: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/demo/README.md

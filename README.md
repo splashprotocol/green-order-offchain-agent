@@ -6,6 +6,7 @@
 - Architecture: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/ARCHITECTURE.md
 - Testing and verification: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/TESTING.md
 - Close-out video demo script: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/DEMO.md
+- Russian close-out video guide: https://github.com/splashprotocol/green-order-offchain-agent/blob/sdk-api/docs/VIDEO_GUIDE_RU.md
 
 
 This repository is forked from `spectrum-offchain-multiplatform` to build a focused
